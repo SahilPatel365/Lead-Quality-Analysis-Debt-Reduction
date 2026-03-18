@@ -1,0 +1,2209 @@
+---
+title: "Lead Quality Analysis"
+subtitle: "Debt Reduction Case Study"
+author: "Sahil Patel"
+date: "March 2026"
+output:
+  pdf_document:
+    toc: true
+    toc_depth: 3
+    number_sections: true
+    latex_engine: xelatex
+---
+
+
+
+
+
+```{r setup, include=FALSE}
+# ============================================================
+# PROJECT:  Lead Quality Analysis — Debt Reduction Case Study
+# ANALYST:  Sahil Patel
+# DATE:     March 2026
+# VERSION:  R 4.5.3
+# ============================================================
+# OBJECTIVE:
+# Analyse ~3,000 leads to identify quality drivers and
+# recommend actions to improve lead quality 8.0% to 9.6%
+# ============================================================
+# BUSINESS QUESTIONS:
+# Q1: Are quality trends improving or declining over time?
+# Q2: What segments drive lead quality differences?
+# Q3: Can we reach 9.6% quality to earn $33 vs $30 per lead?
+# ============================================================
+
+
+knitr::opts_chunk$set(
+  echo    = FALSE,
+  warning = FALSE,
+  message = FALSE,
+  fig.width  = 10,
+  fig.height = 6
+)
+
+# Set working directory globally
+knitr::opts_knit$set(
+  root.dir = "C:/Users/sgpat/Documents/LeadQuality_CaseStudy"
+)
+
+set.seed(42)
+
+# Libraries
+library(readxl)
+library(janitor)
+library(skimr)
+library(DataExplorer)
+library(naniar)
+library(tidyverse)
+library(lubridate)
+library(scales)
+library(forcats)
+library(rstatix)
+library(ggpubr)
+library(ggthemes)
+library(patchwork)
+library(RColorBrewer)
+library(viridis)
+library(ggrepel)
+library(knitr)
+library(kableExtra)
+
+cat("✅ Setup complete\n")
+```
+
+
+# Phase 1: Data Profiling
+
+The first step before any analysis is to understand exactly 
+what we are working with — dimensions, data types, date range, 
+and a high-level profile of every column.
+
+## Dataset Dimensions
+
+```{r load-data}
+
+raw_data <- read_excel(
+  "C:/Users/sgpat/Documents/LeadQuality_CaseStudy/data/Analyst_case_study_dataset_1_(1).xlsx",
+  sheet = "Sheet1"
+)
+
+cat("✅ Data loaded successfully\n")
+cat("Rows:", nrow(raw_data), "\n")
+cat("Columns:", ncol(raw_data), "\n")
+```
+
+The dataset contains 3,021 leads recorded across 24 variables, 
+covering a 6-month period from April to September 2009. Each 
+row represents one individual who submitted a debt reduction 
+enquiry online. With over 3,000 records, the dataset provides 
+sufficient volume for statistically meaningful segment-level analysis.
+
+
+## Data Types and Column Structure
+
+```{r glimpse}
+
+
+# Data types and first values per column
+glimpse(raw_data)
+```
+R correctly identified LeadCreated as a datetime field, which 
+means no conversion is needed for time-based analysis. However, 
+two notable type issues were detected: AddressScore and PhoneScore 
+are stored as character type rather than numeric, and the IP Address 
+column is entirely empty (logical type with no values). Both will 
+be addressed in the cleaning phase.
+
+## Date Range
+
+```{r date-range}
+
+
+
+# What time period does this data cover?
+raw_data %>%
+  summarise(
+    Earliest_Lead = min(LeadCreated, na.rm = TRUE),
+    Latest_Lead   = max(LeadCreated, na.rm = TRUE),
+    Total_Days    = as.numeric(difftime(
+                      max(LeadCreated, na.rm = TRUE),
+                      min(LeadCreated, na.rm = TRUE),
+                      units = "days"))
+  ) %>%
+  kable(caption = "Dataset Date Range")
+```
+
+- Data spans **April 2, 2009 to September 30, 2009** - exactly  181 days (approximately 6 months)
+- No dates fall outside this expected window - no data integrity issues detected in the time dimension
+- The 6-month window provides sufficient volume for monthly trend analysis across at least 6 data points
+
+## CallStatus Distribution
+
+```{r callstatus-profile}
+
+
+# Frequency table of CallStatus — your most important column
+raw_data %>%
+  count(CallStatus, sort = TRUE) %>%
+  mutate(
+    Percentage = round(n / sum(n) * 100, 1),
+    Cumulative = cumsum(Percentage)
+  ) %>%
+  rename(Status = CallStatus, Count = n) %>%
+  kable(caption = "CallStatus Frequency Table")
+  
+```
+## Full Column Profile
+
+```{r full-profile}
+
+
+# Full statistical profile of every column
+skim(raw_data)
+```
+
+- **`Keyword`**: 67.6% missing - expected, as not all traffic 
+  comes from search keywords
+- **`ReferralDomain`**: 17% missing - some leads came directly 
+  without a referral
+- **`MarketingCampaign` and `AdGroup`**: 9% missing - minor gap, 
+  low impact on analysis
+- **`VendorLeadID`**: 8 missing values - negligible
+- **`WidgetName`**: 14 unique ad designs - will require 
+  simplification in Phase 4 Feature Engineering
+- **`DebtLevel`**: 10 unique categories - will be converted to 
+  an ordered factor in Phase 3
+
+## Unique Value Counts
+
+```{r unique-values}
+
+
+# How many unique values in each text column?
+raw_data %>%
+  select(where(is.character)) %>%
+  summarise(across(everything(), n_distinct)) %>%
+  pivot_longer(everything(),
+               names_to  = "Column",
+               values_to = "Unique_Values") %>%
+  arrange(desc(Unique_Values)) %>%
+  kable(caption = "Unique Value Count Per Column")
+```
+
+- `VendorLeadID` has 3,013 unique values - confirms it is a 
+  near-unique identifier, not useful for grouping
+- `Partner` has **6 unique values** - expected only 3 (Google, 
+  Yahoo, AdKnowledge) - possible capitalisation inconsistency 
+  requiring investigation in Phase 2
+- `State` = 32 unique values - good for geographic segmentation
+- `AdvertiserCampaignName` = 2 values - clean binary split 
+  (Branded vs Generic)
+- `PublisherCampaignName` = 2 values - clean binary split 
+  (Online vs Call Center)
+  
+  ---
+
+## Deep Investigation
+
+Three issues flagged during profiling require immediate 
+investigation before proceeding to data quality assessment. 
+These findings will directly inform cleaning decisions in Phase 3.
+
+```{r phase1-investigation}
+cat("=== ALL PARTNER VALUES ===\n")
+raw_data %>%
+  count(Partner, sort = TRUE) %>%
+  mutate(pct = round(n / sum(n) * 100, 1)) %>%
+  print()
+
+cat("\n=== NA CallStatus by Month ===\n")
+raw_data %>%
+  mutate(
+    month          = format(LeadCreated, "%Y-%m"),
+    status_missing = is.na(CallStatus)
+  ) %>%
+  group_by(month) %>%
+  summarise(
+    total_leads    = n(),
+    missing_status = sum(status_missing),
+    missing_pct    = round(mean(status_missing) * 100, 1)
+  ) %>%
+  print()
+
+cat("\n=== AddressScore Values ===\n")
+raw_data %>% count(AddressScore, sort = TRUE) %>% print()
+
+cat("\n=== PhoneScore Values ===\n")
+raw_data %>% count(PhoneScore, sort = TRUE) %>% print()
+```
+
+**Key Findings:**
+
+**Partner Column**
+
+The Partner column returned 6 distinct values rather than the 3 
+expected. The breakdown revealed that "google" (979 leads, 32.4%) 
+and "Google" (639 leads, 21.2%) are being treated as two separate 
+partners due to inconsistent capitalisation. Combined, Google 
+accounts for 53.6% of all leads. Two additional sources also 
+appeared: "Call\_Center" (271 leads, 9.0%) representing phone-based 
+leads, and "Advertise.com" (3 leads, 0.1%), a negligible source. 
+All capitalisation inconsistencies will be standardised in Phase 3.
+
+**CallStatus Missing Values**
+
+The 70.8% missing rate in CallStatus was investigated across all 
+six months to determine whether it was isolated to a specific 
+period or systemic across the full dataset. The results confirmed 
+it is systemic, with missing rates ranging from 62.7% in June to 
+80.0% in May, consistently high throughout the entire data 
+collection window. This pattern strongly suggests these are leads 
+that were never followed up on or whose outcomes were never 
+recorded in the system, rather than a technical data loss event. 
+They will be retained in the dataset and treated as a separate 
+"No Outcome" category rather than being dropped.
+
+**AddressScore and PhoneScore**
+
+Both score columns were stored as character type containing the 
+string "NULL" rather than proper missing values. AddressScore had 
+1,850 NULL entries (61.2%) with valid scores ranging from 1 to 5. 
+PhoneScore had 1,628 NULL entries (53.9%) with valid scores also 
+ranging from 1 to 5, with a single entry of score 1. The "NULL" 
+strings will be converted to NA and both columns will be cast 
+to numeric in Phase 3. The valid scale of 1 to 5 is confirmed 
+with no unexpected values present.
+
+# PHASE 2: DATA QUALITY ASSESSMENT 
+
+## Duplicate Check
+
+```{r}
+library(tidyverse)
+library(janitor)
+
+
+dup_email    <- sum(duplicated(raw_data$Email))
+dup_vendorid <- sum(duplicated(raw_data$VendorLeadID, incomparables = NA))
+cat("Duplicate Emails:", dup_email, "\n")
+cat("Duplicate VendorLeadIDs:", dup_vendorid, "\n")
+```
+133 duplicate email addresses were detected across 3,021 leads, representing 4.4% of total records. These likely reflect the same person submitting multiple enquiries, which inflates raw lead volume but does not represent unique prospects. A single duplicate VendorLeadID was also found, which is negligible. Duplicate emails will be flagged and retained for now but excluded from quality rate calculations in Phase 5 to avoid double-counting.
+
+
+
+
+## Partner Capitalisation Audit
+
+```{r}
+
+raw_data %>%
+  mutate(Partner_clean = str_to_title(Partner)) %>%
+  count(Partner, Partner_clean, sort = TRUE)
+```
+
+The audit confirmed the capitalisation inconsistency flagged in Phase 1. "google" and "Google" are the same partner and will be merged, giving Google a combined total of 1,618 leads (53.6% of all traffic). Note: str_to_title() produces unintended results for two values: "Call_Center" becomes "Call_center" (underscore breaks capitalisation) and "AdKnowledge" becomes "Adknowledge" (loses the capital K). These two will be manually recoded using case_when() in Phase 3 rather than relying on str_to_title() alone.
+
+## State Value Audit
+```{r}
+
+raw_data %>% count(State, sort = TRUE) %>% print(n = 40)
+```
+All 32 state values are clean 2-letter US abbreviations with no full names, typos, or unexpected entries. No cleaning is required for this column. The top five states by lead volume are California (463), Texas (325), New York (283), Florida (261), and Illinois (186), which together account for 52.8% of all leads. These states will be primary segments in Phase 5 EDA.
+
+## DebtLevel Ordering Audit
+
+```{r}
+raw_data %>% count(DebtLevel, sort = FALSE)
+```
+DebtLevel contains 10 categories currently stored as unordered character strings. Two issues were identified: first, "7500-10000" (442 leads) and "7500-15000" (271 leads) are overlapping ranges, suggesting the lower bound was captured differently across different form versions. Second, "More_than_100000" uses an underscore and does not sort correctly alphabetically. Both issues will be resolved in Phase 3 by converting DebtLevel to an ordered factor with explicit level definitions.
+
+## AddressScore and PhoneScore NULL Audit
+
+```{r}
+cat("AddressScore NULLs:", sum(raw_data$AddressScore == "NULL"), "\n")
+cat("PhoneScore NULLs:", sum(raw_data$PhoneScore == "NULL"), "\n")
+```
+AddressScore contains 1,850 string "NULL" entries (61.2% of rows) and PhoneScore contains 1,628 (53.9%). Both columns store values as character type. Valid scores range from 1 to 5 with no unexpected values outside this scale. The "NULL" strings will be replaced with proper NA values using na_if() and both columns will be cast to numeric in Phase 3. The high missing rate is expected, as the assignment notes these scores were only introduced partway through the data collection period.
+
+## WidgetName Audit
+
+```{r}
+
+raw_data %>%
+  mutate(widget_size = str_extract(WidgetName, "\\d{6}")) %>%
+  count(widget_size)
+```
+The audit confirmed that widget sizes 300250 (849 leads, 28.1%) and 302252 (2,172 leads, 71.9%) are the only two sizes present. As documented in the assignment brief, these two sizes are functionally identical and represent the same ad format. They will be standardised to a single size label in Phase 4 Feature Engineering to prevent artificial splits during segment analysis.
+
+## CallStatus Values Audit
+
+```{r}
+
+raw_data %>% count(CallStatus, sort = TRUE)
+```
+All 7 non-null CallStatus values match the assignment definitions exactly, with no spelling errors, extra spaces, or unexpected categories. The 2,140 NA entries are confirmed as systemic across all months as established in Phase 1. This column is clean and ready for recoding in Phase 3 where NAs will become "No Outcome" and the 7 values will be collapsed into 4 groups: Closed, Good Quality (EP Sent/Received/Confirmed), Bad Quality (Unable to Contact, Invalid Profile, Doesn't Qualify), and No Outcome.
+
+# Flag the overlapping DebtLevel ranges
+
+```{r}
+
+raw_data %>%
+  filter(str_starts(DebtLevel, "7500")) %>%
+  count(DebtLevel)
+
+```
+
+The overlap audit confirmed two categories sharing the same lower bound of $7,500: "7500-10000" (442 leads, 14.6%) and "7500-15000" (271 leads, 9.0%), totalling 713 leads or 23.6% of the dataset. This appears to be a form versioning issue where an earlier version of the ad collected a broader range ("7500-15000") and a later version split it into a narrower band ("7500-10000"). Since the raw data cannot confirm which is correct for each individual lead, both categories will be retained as-is in Phase 3 and collapsed into a single "Under $15,000" band in Phase 4 Feature Engineering. This prevents the segment from being artificially split during quality rate comparisons.
+
+## Data Quality Summary
+```{r}
+library(kableExtra)
+quality_log <- tibble(
+  Col = c(
+    "Partner",
+    "AddressScore",
+    "PhoneScore",
+    "IP Address",
+    "DebtLevel",
+    "DebtLevel",
+    "CallStatus",
+    "Email",
+    "VendorLeadID"
+  ),
+  Issue = c(
+    "Capitalisation inconsistency: 'google' vs 'Google' treated as separate partners",
+    "String 'NULL' stored instead of NA; column type is character not numeric",
+    "String 'NULL' stored instead of NA; column type is character not numeric",
+    "100% empty (3,021 NAs); logical type with no usable values",
+    "Unordered character string; alphabetic sort is incorrect for range data",
+    "Overlapping lower bound: '7500-10000' (442) and '7500-15000' (271) share same floor",
+    "70.8% missing (2,140 rows); systemic across all 6 months",
+    "133 duplicate email addresses (4.4% of leads)",
+    "8 missing values"
+  ),
+  Action = c(
+    "case_when() to manually standardise all 6 values",
+    "na_if('NULL') then as.numeric()",
+    "na_if('NULL') then as.numeric()",
+    "select(-`IP Address`) - drop entirely",
+    "factor() with explicitly defined ordered levels",
+    "Retain both in Phase 3; collapse to 'Under 15000' band in Phase 4",
+    "replace_na('No Outcome'); recode into 4 quality groups in Phase 4",
+    "Flag duplicates; exclude from quality rate calculations in Phase 5",
+    "Flag only - retain rows"
+  )
+)
+
+knitr::kable(quality_log, 
+             caption = "Phase 2: Data Quality Issues and Planned Fixes",
+             booktabs = TRUE) %>%
+  kableExtra::column_spec(1, width = "2.5cm") %>%
+  kableExtra::column_spec(2, width = "7.5cm") %>%
+  kableExtra::column_spec(3, width = "5cm")
+
+
+```
+Phase 2 identified 7 data quality issues across 6 columns. No issues were found in State, CallStatus values, LeadCreated, or LandingPageURL. The most material issue for analysis is the Partner capitalisation inconsistency, which would have split Google's 53.6% share across two separate groups and significantly distorted partner-level quality comparisons. The IP Address column will be dropped entirely. All remaining issues have clearly defined fixes ready to execute in Phase 3.
+
+
+# Phase 3: Data Cleaning
+
+## Drop IP Address Column
+
+```{r}
+
+clean_data <- raw_data %>%
+  select(-`IP Address`)
+
+cat("Columns after drop:", ncol(clean_data), "\n")
+
+```
+The IP Address column was removed, reducing the dataset from 24 to 23 columns. No analytical value is lost as the column was entirely empty across all 3,021 rows.
+
+
+## Standardise Partner Values
+
+```{r}
+clean_data <- clean_data %>%
+  mutate(Partner = case_when(
+    str_to_lower(Partner) == "google"       ~ "Google",
+    str_to_lower(Partner) == "yahoo"        ~ "Yahoo",
+    Partner == "AdKnowledge"                ~ "AdKnowledge",
+    Partner == "Call_Center"                ~ "Call Center",
+    Partner == "Advertise.com"              ~ "Advertise.com",
+    TRUE                                    ~ Partner
+  ))
+
+clean_data %>% count(Partner, sort = TRUE)
+
+```
+Partner values are now clean across 5 categories. Google is the dominant traffic source at 1,618 leads (53.6%), followed by Yahoo at 958 (31.7%), Call Center at 271 (9.0%), AdKnowledge at 171 (5.7%), and Advertise.com at 3 (0.1%). The previous false split between "google" and "Google" is resolved.
+
+## Fix AddressScore and PhoneScore
+
+
+```{r}
+clean_data <- clean_data %>%
+  mutate(
+    AddressScore = na_if(AddressScore, "NULL"),
+    AddressScore = as.numeric(AddressScore),
+    PhoneScore   = na_if(PhoneScore, "NULL"),
+    PhoneScore   = as.numeric(PhoneScore)
+  )
+
+cat("AddressScore NAs after fix:", sum(is.na(clean_data$AddressScore)), "\n")
+cat("PhoneScore NAs after fix:",   sum(is.na(clean_data$PhoneScore)), "\n")
+cat("AddressScore class:", class(clean_data$AddressScore), "\n")
+cat("PhoneScore class:",   class(clean_data$PhoneScore), "\n")
+
+```
+Both columns are now correctly typed as numeric. AddressScore retains 1,850 NA values and PhoneScore retains 1,628, consistent with Phase 2 findings. No data was lost and no unexpected values were introduced by the conversion.
+
+## Recode CallStatus
+
+```{r}
+clean_data <- clean_data %>%
+  mutate(
+    CallStatus = replace_na(CallStatus, "No Outcome"),
+    QualityGroup = case_when(
+      CallStatus == "Closed"                                       ~ "Good",
+      CallStatus %in% c("EP Sent", "EP Received", "EP Confirmed") ~ "Good",
+      CallStatus %in% c("Unable to contact - Bad Contact Information",
+                        "Contacted - Invalid Profile",
+                        "Contacted - Doesn't Qualify")            ~ "Bad",
+      CallStatus == "No Outcome"                                   ~ "No Outcome",
+      TRUE                                                         ~ "No Outcome"
+    )
+  )
+
+clean_data %>% count(QualityGroup, sort = TRUE)
+
+
+```
+All 3,021 leads are now assigned a QualityGroup with zero unclassified rows. No Outcome accounts for 2,140 leads (70.8%), Bad quality for 488 (16.2%), and Good quality for 393 (13.0%). The broad quality rate of 13.0% includes all EP pipeline leads alongside closed leads and is not directly comparable to the 9.6% contract target, which is defined on closed leads only. Section 4C uses the closed rate as the business performance metric.
+
+## Order DebtLevel Factor
+
+```{r}
+debt_levels <- c("7500-10000", "7500-15000", "10001-15000",
+                 "15001-20000", "20001-30000", "30001-50000",
+                 "50001-70000", "70001-90000", "90000-100000",
+                 "More_than_100000")
+
+clean_data <- clean_data %>%
+  mutate(DebtLevel = factor(DebtLevel, levels = debt_levels, ordered = TRUE))
+
+cat("DebtLevel class:", class(clean_data$DebtLevel), "\n")
+levels(clean_data$DebtLevel)
+
+```
+DebtLevel is now an ordered factor with all 10 levels correctly sequenced from lowest to highest debt band. Sorting and chart axis ordering in subsequent phases will reflect true debt magnitude rather than alphabetical order.
+
+## Flag Duplicate Emails
+
+```{r}
+clean_data <- clean_data %>%
+  mutate(is_duplicate_email = duplicated(Email) | 
+                              duplicated(Email, fromLast = TRUE))
+
+cat("Leads flagged as duplicate email:", sum(clean_data$is_duplicate_email), "\n")
+cat("Unique leads (non-duplicate):", sum(!clean_data$is_duplicate_email), "\n")
+
+```
+164 leads share an email address with at least one other record, representing 5.4% of the dataset. These are flagged with is_duplicate_email = TRUE and retained in the dataset. The 2,857 non-duplicate leads will serve as the clean base for quality rate calculations in Phase 5.
+
+Note: 133 is the count of distinct email addresses that appear more than once. 164 is the count of all rows flagged as non-first occurrences, since a single email appearing three times contributes 1 to the first count and 2 to the second. The 2,857 unique-lead base retains one row per email address and is the correct denominator for all quality calculations.
+
+## Verification
+
+```{r}
+cat("Final row count:", nrow(clean_data), "\n")
+cat("Final column count:", ncol(clean_data), "\n")
+cat("Remaining NAs in CallStatus:", sum(is.na(clean_data$CallStatus)), "\n")
+cat("Remaining string NULLs in AddressScore:", 
+    sum(clean_data$AddressScore == "NULL", na.rm = TRUE), "\n")
+cat("Partner values remaining:", 
+    paste(unique(clean_data$Partner), collapse = ", "), "\n")
+cat("QualityGroup values:", 
+    paste(unique(clean_data$QualityGroup), collapse = ", "), "\n")
+
+```
+All 8 issues identified in Phase 2 have been resolved. Row count holds at 3,021, confirming no records were dropped during cleaning. The column count of 25 reflects the original 24 columns, minus IP Address, plus the two newly engineered columns QualityGroup and is_duplicate_email. CallStatus has zero remaining NAs, AddressScore has zero remaining string NULLs, and all Partner and QualityGroup values are clean and consistent. The dataset is ready for Phase 4 Feature Engineering.
+
+
+
+# Phase 4: Feature Engineering
+
+
+## Time Features
+```{r}
+clean_data <- clean_data %>%
+  mutate(
+    lead_month    = floor_date(LeadCreated, "month"),
+    lead_month_label = format(LeadCreated, "%Y-%m"),
+    lead_week     = floor_date(LeadCreated, "week"),
+    lead_dow      = wday(LeadCreated, label = TRUE, abbr = TRUE),
+    lead_hour     = hour(LeadCreated)
+  )
+
+cat("New time columns created:", 
+    paste(c("lead_month", "lead_month_label", "lead_week", "lead_dow", "lead_hour"), 
+          collapse = ", "), "\n")
+clean_data %>% count(lead_month_label)
+
+```
+Five time-based features were engineered from LeadCreated: lead_month (floor date to month), lead_month_label (formatted as YYYY-MM for readability), lead_week (floor date to week), lead_dow (day of week), and lead_hour (hour of day). Monthly distribution shows fairly consistent volume across the 6-month period, ranging from 344 leads in September to 609 in June, with no obvious seasonality.
+
+## Simplify Widget Name
+
+```{r}
+clean_data <- clean_data %>%
+  mutate(
+    widget_pages  = if_else(str_detect(WidgetName, "2DC"), "2-Page Form", "1-Page Form"),
+    widget_design = case_when(
+      str_detect(WidgetName, "CreditSolutions") ~ "CreditSolutions",
+      str_detect(WidgetName, "yellowarrow-blue") ~ "YellowArrow Blue",
+      str_detect(WidgetName, "yellowarrow-dark") ~ "YellowArrow Dark",
+      str_detect(WidgetName, "yellowarrow")      ~ "YellowArrow",
+      str_detect(WidgetName, "BlueMeter")        ~ "BlueMeter",
+      str_detect(WidgetName, "Head2")            ~ "Head2",
+      str_detect(WidgetName, "Head3")            ~ "Head3",
+      str_detect(WidgetName, "white")            ~ "White",
+      TRUE                                       ~ "Standard"
+    )
+  )
+
+clean_data %>% count(widget_design, sort = TRUE)
+clean_data %>% count(widget_pages)
+
+```
+Widget designs were collapsed from 14 unique widget name strings into 9 design categories plus a form structure flag (1-page vs 2-page). CreditSolutions is the dominant design at 1,206 leads (39.9%), followed by Standard at 620 (20.5%) and White at 436 (14.4%). The YellowArrow variants combined account for 416 leads (13.8%). One-page forms dominate at 2,859 leads (94.6%), with only 162 two-page forms (5.4%).
+
+## Collapse DebtLevel Bands
+
+```{r}
+clean_data <- clean_data %>%
+  mutate(
+    DebtBand = case_when(
+      DebtLevel %in% c("7500-10000", "7500-15000", "10001-15000") ~ "Under 15K",
+      DebtLevel == "15001-20000"                                   ~ "15K-20K",
+      DebtLevel == "20001-30000"                                   ~ "20K-30K",
+      DebtLevel == "30001-50000"                                   ~ "30K-50K",
+      DebtLevel == "50001-70000"                                   ~ "50K-70K",
+      DebtLevel == "70001-90000"                                   ~ "70K-90K",
+      DebtLevel == "90000-100000"                                  ~ "90K-100K",
+      DebtLevel == "More_than_100000"                              ~ "Over 100K",
+      TRUE                                                         ~ "Unknown"
+    ),
+    DebtBand = factor(DebtBand, levels = c("Under 15K", "15K-20K", "20K-30K",
+                                           "30K-50K", "50K-70K", "70K-90K",
+                                           "90K-100K", "Over 100K"), ordered = TRUE)
+  )
+
+clean_data %>% count(DebtBand)
+
+```
+The original 10 DebtLevel categories were collapsed into 8 ordered debt bands using intuitive $5K increments. The "Under 15K" band absorbed the overlapping 7500-10000, 7500-15000, and 10001-15000 ranges, totalling 1,004 leads (33.2%). This prevents artificial segment splits during quality rate comparisons. All other bands maintain clean, non-overlapping ranges.
+
+## Branded vs Generic Flag
+
+```{r}
+clean_data <- clean_data %>%
+  mutate(
+    ad_type = if_else(
+      AdvertiserCampaignName == "creditsolutions-branded-shortform",
+      "Branded", "Generic"
+    )
+  )
+
+clean_data %>% count(ad_type)
+
+```
+Ad type split shows Branded (CreditSolutions) at 1,206 leads (39.9%) versus Generic (Debt Settlement Master) at 1,815 leads (60.1%), representing a fairly balanced split across the dataset. This binary split will support straightforward quality rate comparison between advertiser branding strategies.
+
+## Online vs Call Center Flag
+
+```{r}
+clean_data <- clean_data %>%
+  mutate(
+    lead_source = if_else(
+      PublisherCampaignName == "DebtReductionCallCenter",
+      "Call Center", "Online"
+    )
+  )
+
+clean_data %>% count(lead_source)
+
+
+
+```
+"Lead source produces two values: Call Center (271 leads, 9.0%) and Online (2,750 leads, 91.0%). The 271 Call Center leads were generated by phone, with form data entered by call center staff on behalf of the consumer."
+
+## Lead Verification Score
+
+```{r}
+clean_data <- clean_data %>%
+  mutate(
+    verify_score = case_when(
+      !is.na(AddressScore) & !is.na(PhoneScore) ~ (AddressScore + PhoneScore) / 2,
+      !is.na(AddressScore) & is.na(PhoneScore)  ~ AddressScore,
+      is.na(AddressScore)  & !is.na(PhoneScore) ~ PhoneScore,
+      TRUE                                       ~ NA_real_
+    )
+  )
+
+cat("verify_score NAs:", sum(is.na(clean_data$verify_score)), "\n")
+summary(clean_data$verify_score)
+
+```
+A composite verification score was engineered by averaging AddressScore and PhoneScore where available. The score ranges from 1.5 to 5.0 with a median of 4.0 and mean of 4.058, indicating generally high address and phone verification across the leads that have both scores. However, 1,628 leads (53.9%) have a missing verify_score because they lack PhoneScore data, a limitation of the data collection period.
+
+## Save Clean Dataset
+
+```{r}
+library(writexl)
+
+write_xlsx(clean_data, "data/clean_data_final.xlsx")
+
+cat("Clean dataset saved to data/clean_data_final.xlsx\n")
+cat("Rows:", nrow(clean_data), "\n")
+cat("Columns:", ncol(clean_data), "\n")
+
+
+```
+The clean engineered dataset was saved to Excel format (clean_data_final.xlsx) with 3,021 rows and 36 columns. The dataset includes all original raw columns except IP Address, plus 11 newly engineered features: QualityGroup, is_duplicate_email, lead_month, lead_month_label, lead_week, lead_dow, lead_hour, widget_pages, widget_design, DebtBand, ad_type, lead_source, and verify_score.
+
+## Verification
+
+
+```{r}
+cat("Total columns now:", ncol(clean_data), "\n")
+cat("New columns added in Phase 4:",
+    paste(c("lead_month", "lead_month_label", "lead_week", "lead_dow", "lead_hour",
+            "widget_pages", "widget_design", "DebtBand",
+            "ad_type", "lead_source", "verify_score"), collapse = ", "), "\n")
+
+cat("\nQualityGroup distribution:\n")
+clean_data %>% count(QualityGroup) %>% print()
+
+cat("\nAd Type distribution:\n")
+clean_data %>% count(ad_type) %>% print()
+
+cat("\nLead Source distribution:\n")
+clean_data %>% count(lead_source) %>% print()
+
+```
+All 11 engineered features are now present in the dataset. QualityGroup shows the expected distribution: No Outcome (2,140, 70.8%), Bad (488, 16.2%), and Good (393, 13.0%). Ad Type is split 39.9% Branded vs 60.1% Generic. The dataset is clean, feature-rich, and ready for Phase 5 Exploratory Data Analysis.
+
+
+# Phase 5: Exploratory Data Analysis
+
+## Analysis Setup
+```{r}
+library(tidyverse)
+library(lubridate)
+library(scales)
+library(knitr)
+
+base_data <- clean_data %>%
+  filter(!is_duplicate_email)
+
+calc_quality <- function(df, ...) {
+  df %>%
+    group_by(...) %>%
+    summarise(
+      Total      = n(),
+      Good       = sum(QualityGroup == "Good"),
+      Bad        = sum(QualityGroup == "Bad"),
+      No_Outcome = sum(QualityGroup == "No Outcome"),
+      Rate       = round(Good / Total * 100, 1),
+      .groups    = "drop"
+    ) %>%
+    arrange(desc(Rate))
+}
+
+theme_analyst <- theme_minimal(base_size = 12) +
+  theme(
+    plot.title       = element_text(face = "bold", size = 13),
+    plot.subtitle    = element_text(color = "grey50", size = 10),
+    panel.grid.minor = element_blank(),
+    plot.caption     = element_text(color = "grey60", size = 8),
+    axis.title       = element_text(size = 10)
+  )
+
+TARGET <- 9.6
+
+cat("Base dataset (non-duplicate, all outcomes):", nrow(base_data), "leads\n")
+cat("Good leads:", sum(base_data$QualityGroup == "Good"), "\n")
+cat("Bad leads:", sum(base_data$QualityGroup == "Bad"), "\n")
+cat("No Outcome leads:", sum(base_data$QualityGroup == "No Outcome"), "\n")
+
+```
+The base dataset for quality rate analysis contains 2,857 non-duplicate leads after excluding 164 flagged duplicate email records. Of these, 372 are Good quality (13.0%), 443 are Bad quality (15.5%), and 2,042 have No Outcome (71.5%). All quality rates in this phase are calculated as Good / Total including No Outcome leads, which is the correct denominator for business performance measurement.
+
+
+## Overall Baseline Quality Rate
+```{r}
+overall <- base_data %>%
+  summarise(
+    Total_Leads  = n(),
+    Good_Leads   = sum(QualityGroup == "Good"),
+    Bad_Leads    = sum(QualityGroup == "Bad"),
+    Quality_Rate = round(Good_Leads / Total_Leads * 100, 1),
+    Target       = TARGET,
+    Gap          = round(TARGET - Quality_Rate, 1)
+  )
+
+knitr::kable(overall, caption = "Overall Baseline Quality Rate")
+
+```
+The overall quality rate stands at 13.0% against a target of 9.6%, indicating the campaign is currently performing 3.4 percentage points above target. However, this headline number masks significant variation across segments. The No Outcome rate of 71.5% means that nearly 3 in every 4 leads are never followed up on, which represents the single largest opportunity for improvement across the entire dataset.
+This 13.0% figure is the broad quality rate (Good = Closed + EP steps). The Phase 8 business impact analysis uses Closed-only leads as the contract metric, which produces an 8.09% baseline.
+
+## Quality Rate by Month
+```{r}
+monthly <- calc_quality(base_data, lead_month_label) %>%
+  arrange(lead_month_label)
+
+knitr::kable(monthly, caption = "Quality Rate by Month")
+
+ggplot(monthly, aes(x = lead_month_label, y = Rate, group = 1)) +
+  geom_line(color = "#2C7BB6", linewidth = 1.2) +
+  geom_point(color = "#2C7BB6", size = 3.5) +
+  geom_hline(yintercept = TARGET, linetype = "dashed",
+             color = "red", linewidth = 0.8) +
+  annotate("text", x = 1.2, y = TARGET + 0.8,
+           label = paste0("Target: ", TARGET, "%"),
+           color = "red", size = 3.5, hjust = 0) +
+  geom_text(aes(label = paste0(Rate, "%")),
+            vjust = -1, size = 3.2, color = "#2C7BB6") +
+  labs(title    = "Monthly Lead Quality Rate Trend",
+       subtitle = "April to September 2009 | Dashed line = 9.6% target",
+       x = "Month", y = "Quality Rate (%)") +
+  theme_analyst
+
+```
+Quality rate shows an uneven pattern across the 6-month period, ranging from a low of 8.7% in July to a high of 16.9% in September. July is the only month that falls below the 9.6% target, while April (15.8%), June (14.2%), August (13.8%), and September (16.9%) all exceed it. There is no consistent upward or downward trend, which suggests quality is influenced by segment mix changes month to month rather than a structural improvement or decline. This will be tested formally in Phase 7 with Spearman correlation.
+
+
+## Quality Rate by Partner
+```{r}
+partner_q <- calc_quality(base_data, Partner)
+
+knitr::kable(partner_q, caption = "Quality Rate by Partner")
+
+ggplot(partner_q, aes(x = reorder(Partner, Rate), y = Rate, fill = Rate)) +
+  geom_col(width = 0.6) +
+  geom_hline(yintercept = TARGET, linetype = "dashed",
+             color = "red", linewidth = 0.8) +
+  geom_text(aes(label = paste0(Rate, "%")),
+            hjust = -0.2, size = 3.5) +
+  coord_flip() +
+  scale_fill_gradient(low = "#d73027", high = "#1a9850", guide = "none") +
+  labs(title    = "Lead Quality Rate by Partner",
+       subtitle = "Dashed line = 9.6% target",
+       x = NULL, y = "Quality Rate (%)") +
+  theme_analyst
+
+ggsave(
+  "C:/Users/sgpat/Documents/LeadQuality_CaseStudy/output/charts/chart_partner_quality.png",
+  width = 9, height = 5, dpi = 150
+)
+
+
+```
+AdKnowledge delivers the highest meaningful quality rate at 18.7% from 171 leads, followed by Call Center at 17.9% from 134 leads and Yahoo at 14.3% from 949 leads. Google, despite being the dominant traffic source at 1,600 leads (56.0% of the base), produces the lowest quality rate among meaningful partners at 11.2%. Advertise.com's 33.3% rate is based on only 3 leads and is not statistically actionable. The gap between AdKnowledge (18.7%) and Google (11.2%) is 7.5 percentage points, which at Google's volume represents a significant number of missed good leads.
+
+## Quality Rate by State
+```{r}
+state_q <- calc_quality(base_data, State) %>%
+  filter(Total >= 15) %>%
+  slice_head(n = 15)
+
+knitr::kable(state_q, caption = "Quality Rate by State (Top 15, min 15 leads)")
+
+ggplot(state_q, aes(x = reorder(State, Rate), y = Rate, fill = Rate)) +
+  geom_col(width = 0.7) +
+  geom_hline(yintercept = TARGET, linetype = "dashed",
+             color = "red", linewidth = 0.8) +
+  geom_text(aes(label = paste0(Rate, "%")),
+            hjust = -0.2, size = 3.2) +
+  coord_flip() +
+  scale_fill_gradient(low = "#d73027", high = "#1a9850", guide = "none") +
+  labs(title    = "Lead Quality Rate by State (Top 15)",
+       subtitle = "Minimum 15 leads per state | Dashed line = 9.6% target",
+       x = NULL, y = "Quality Rate (%)") +
+  theme_analyst
+
+```
+Oklahoma leads all states with a 24.4% quality rate from 45 leads, followed by Hawaii at 20.7% and Massachusetts at 19.0%. California and Texas, the two highest volume states at 438 and 310 leads respectively, both perform above target at 15.8% and 12.9%. The top 5 states by quality rate all exceed the 9.6% target by at least 3 percentage points, suggesting geographic targeting adjustments could meaningfully lift overall performance. Note: Only states with a minimum of 15 leads are included to ensure statistical reliability.
+
+
+## Quality Rate by Widget Design
+```{r}
+widget_q <- calc_quality(base_data, widget_design)
+
+knitr::kable(widget_q, caption = "Quality Rate by Widget Design")
+
+ggplot(widget_q, aes(x = reorder(widget_design, Rate), y = Rate, fill = Rate)) +
+  geom_col(width = 0.7) +
+  geom_hline(yintercept = TARGET, linetype = "dashed",
+             color = "red", linewidth = 0.8) +
+  geom_text(aes(label = paste0(Rate, "%")),
+            hjust = -0.2, size = 3.5) +
+  coord_flip() +
+  scale_fill_gradient(low = "#d73027", high = "#1a9850", guide = "none") +
+  labs(title    = "Lead Quality Rate by Widget Design",
+       subtitle = "Dashed line = 9.6% target",
+       x = NULL, y = "Quality Rate (%)") +
+  theme_analyst
+
+ggsave(
+  "C:/Users/sgpat/Documents/LeadQuality_CaseStudy/output/charts/chart_widget_quality.png",
+  width = 8, height = 5, dpi = 150
+)
+
+tbl_save_widget <- base_data %>%
+  group_by(widget_design) %>%
+  summarise(
+    Total = n(),
+    Good  = sum(QualityGroup == "Good"),
+    Bad   = sum(QualityGroup == "Bad"),
+    No_Outcome = sum(QualityGroup == "No Outcome"),
+    Rate  = round(Good / Total * 100, 1)
+  ) %>%
+  arrange(desc(Rate))
+
+write.csv(
+  tbl_save_widget,
+  "C:/Users/sgpat/Documents/LeadQuality_CaseStudy/output/tables/table_widget_quality.csv",
+  row.names = FALSE
+)
+
+```
+YellowArrow achieves the highest quality rate at 24.5% but from only 49 leads, limiting its statistical weight. The two most analytically reliable high performers are Head2 at 16.3% (86 leads) and BlueMeter at 14.4% (174 leads). The dominant widget CreditSolutions runs at 13.1% across 1,196 leads, performing slightly above target. Head3 is the clear underperformer at 6.9% from 72 leads, the only widget below the 9.6% target with sufficient volume to be meaningful. Shifting budget away from Head3 toward BlueMeter or Head2 is a directly actionable lever.
+
+
+## Quality Rate by Ad Type
+```{r}
+adtype_q <- calc_quality(base_data, ad_type)
+
+knitr::kable(adtype_q, caption = "Quality Rate by Ad Type: Branded vs Generic")
+
+ggplot(adtype_q, aes(x = ad_type, y = Rate, fill = ad_type)) +
+  geom_col(width = 0.5) +
+  geom_hline(yintercept = TARGET, linetype = "dashed",
+             color = "red", linewidth = 0.8) +
+  geom_text(aes(label = paste0(Rate, "%")),
+            vjust = -0.5, size = 4.5, fontface = "bold") +
+  scale_fill_manual(values = c("Branded" = "#2C7BB6", "Generic" = "#74ADD1"),
+                    guide = "none") +
+  labs(title    = "Quality Rate: Branded vs Generic Ads",
+       subtitle = "Dashed line = 9.6% target",
+       x = NULL, y = "Quality Rate (%)") +
+  theme_analyst
+
+```
+Branded and Generic ads perform nearly identically at 13.1% and 12.9% respectively, a difference of only 0.2 percentage points. Both exceed the 9.6% target. This finding indicates that ad type alone is not a meaningful differentiator of lead quality in this dataset. The more important question for Phase 6 is whether Branded or Generic performs differently within specific partners or debt bands, where interaction effects may reveal hidden variation.
+
+
+## Quality Rate by Debt Band
+```{r}
+debt_q <- calc_quality(base_data, DebtBand) %>%
+  arrange(DebtBand)
+
+knitr::kable(debt_q, caption = "Quality Rate by Debt Band")
+
+ggplot(debt_q, aes(x = DebtBand, y = Rate, fill = Rate)) +
+  geom_col(width = 0.7) +
+  geom_hline(yintercept = TARGET, linetype = "dashed",
+             color = "red", linewidth = 0.8) +
+  geom_text(aes(label = paste0(Rate, "%")),
+            vjust = -0.5, size = 3.5) +
+  scale_fill_gradient(low = "#d73027", high = "#1a9850", guide = "none") +
+  labs(title    = "Lead Quality Rate by Debt Band",
+       subtitle = "Ordered low to high debt | Dashed line = 9.6% target",
+       x = "Debt Band", y = "Quality Rate (%)") +
+  theme_analyst +
+  theme(axis.text.x = element_text(angle = 30, hjust = 1))
+
+ggsave(
+  "C:/Users/sgpat/Documents/LeadQuality_CaseStudy/output/charts/chart_debtband_quality.png",
+  width = 8, height = 5, dpi = 150
+)
+
+tbl_save_debt <- base_data %>%
+  group_by(DebtBand) %>%
+  summarise(
+    Total = n(),
+    Good  = sum(QualityGroup == "Good"),
+    Bad   = sum(QualityGroup == "Bad"),
+    No_Outcome = sum(QualityGroup == "No Outcome"),
+    Rate  = round(Good / Total * 100, 1)
+  )
+
+write.csv(
+  tbl_save_debt,
+  "C:/Users/sgpat/Documents/LeadQuality_CaseStudy/output/tables/table_debtband_quality.csv",
+  row.names = FALSE
+)
+
+```
+Quality rate follows a non-linear pattern across debt bands. The 70K-90K band delivers the highest rate at 20.2% from 124 leads, while Over 100K delivers the lowest at 6.7% from 180 leads, the only debt band below target with material volume. The mid-range bands of 20K-30K and 50K-70K both perform at 15.9%. The Under 15K band, which is the largest segment at 940 leads, runs at 11.3%, slightly above target. The Over 100K band's underperformance warrants investigation in Phase 6 to determine whether it is concentrated in a specific partner or widget.
+
+
+## Quality Rate by Lead Source
+```{r}
+source_q <- calc_quality(base_data, lead_source)
+
+knitr::kable(source_q, caption = "Quality Rate by Lead Source")
+
+ggplot(source_q, aes(x = lead_source, y = Rate, fill = lead_source)) +
+  geom_col(width = 0.5) +
+  geom_hline(yintercept = TARGET, linetype = "dashed",
+             color = "red", linewidth = 0.8) +
+  geom_text(aes(label = paste0(Rate, "%")),
+            vjust = -0.5, size = 4.5, fontface = "bold") +
+  scale_fill_manual(values = c("Online" = "#2C7BB6", "Call Center" = "#F46D43"),
+                    guide = "none") +
+  labs(title    = "Quality Rate: Online vs Call Center",
+       subtitle = "Dashed line = 9.6% target",
+       x = NULL, y = "Quality Rate (%)") +
+  theme_analyst
+
+tbl_save_source <- base_data %>%
+  group_by(lead_source) %>%
+  summarise(
+    Total = n(),
+    Good  = sum(QualityGroup == "Good"),
+    Bad   = sum(QualityGroup == "Bad"),
+    No_Outcome = sum(QualityGroup == "No Outcome"),
+    Rate  = round(Good / Total * 100, 1)
+  )
+
+write.csv(
+  tbl_save_source,
+  "C:/Users/sgpat/Documents/LeadQuality_CaseStudy/output/tables/table_callcenter_quality.csv",
+  row.names = FALSE
+)
+
+```
+Call Center leads outperform Online leads at 17.9% versus 12.8%, a gap of 5.1 percentage points. This is expected: Call Center staff pre-screen leads before entry, whereas online leads are self-submitted with no upfront qualification. Despite Call Center's higher quality rate, it accounts for only 134 leads (4.7% of the base), limiting its total impact on the overall rate. Online leads at 2,723 records drive the vast majority of volume and represent the primary lever for improving overall quality.
+
+Note: Of the original 271 Call Center leads, 137 (50.6%) were flagged as duplicate emails in Phase 3, a rate three times higher than the Online channel (0.9%). This is consistent with call center agents entering the same consumer multiple times across repeated calls.
+
+## Quality Rate by Day of Week
+```{r}
+dow_q <- calc_quality(base_data, lead_dow) %>%
+  arrange(lead_dow)
+
+knitr::kable(dow_q, caption = "Quality Rate by Day of Week")
+
+ggplot(dow_q, aes(x = lead_dow, y = Rate, fill = Rate)) +
+  geom_col(width = 0.7) +
+  geom_hline(yintercept = TARGET, linetype = "dashed",
+             color = "red", linewidth = 0.8) +
+  geom_text(aes(label = paste0(Rate, "%")),
+            vjust = -0.5, size = 3.5) +
+  scale_fill_gradient(low = "#d73027", high = "#1a9850", guide = "none") +
+  labs(title    = "Lead Quality Rate by Day of Week",
+       subtitle = "Dashed line = 9.6% target",
+       x = NULL, y = "Quality Rate (%)") +
+  theme_analyst
+
+```
+
+Monday and Tuesday are the strongest performing days at 14.8% and 14.2% respectively, while Sunday and Friday are the weakest at 10.4% and 11.4%. All days exceed the 9.6% target. The 4.4 percentage point gap between Monday and Sunday is the widest day-of-week variation observed. This pattern is consistent with typical B2C lead generation, where early-week intent is higher. The variation is relatively modest compared to partner or debt band differences, making day of week a secondary optimisation lever.
+
+
+## EDA Summary
+
+```{r}
+eda_summary <- bind_rows(
+  calc_quality(base_data, Partner) %>%
+    mutate(Dimension = "Partner") %>%
+    rename(Category = Partner),
+  calc_quality(base_data, widget_design) %>%
+    mutate(Dimension = "Widget Design") %>%
+    rename(Category = widget_design),
+  calc_quality(base_data, ad_type) %>%
+    mutate(Dimension = "Ad Type") %>%
+    rename(Category = ad_type),
+  calc_quality(base_data, DebtBand) %>%
+    mutate(Dimension = "Debt Band") %>%
+    rename(Category = DebtBand),
+  calc_quality(base_data, lead_source) %>%
+    mutate(Dimension = "Lead Source") %>%
+    rename(Category = lead_source),
+
+) %>%
+  select(Dimension, Category, Total, Good, Bad, Rate) %>%
+  arrange(desc(Rate))
+
+knitr::kable(eda_summary,
+             caption = "Phase 5: Full EDA Summary - All Segments Ranked by Quality Rate")
+
+
+```
+Across all segments, the strongest quality rate signals come from three dimensions: Partner (AdKnowledge at 18.7% vs Google at 11.2%), Debt Band (70K-90K at 20.2% vs Over 100K at 6.7%), and Widget Design (Head3 at 6.9% as a clear underperformer). Ad Type shows no meaningful differentiation. These three dimensions will be the primary focus of Phase 6 multi-variable analysis, where combinations of top-performing partner, debt band, and widget design segments will be examined for compounding quality rate effects.
+Note: Call Center appears under both Partner and Lead Source dimensions as it represents the same 134 leads in both segmentations.
+
+
+# Phase 6: Multi-Variable Analysis
+
+## Setup
+```{r}
+calc_quality_2d <- function(df, var1, var2, min_n = 10) {
+  df %>%
+    group_by({{ var1 }}, {{ var2 }}) %>%
+    summarise(
+      Total      = n(),
+      Good       = sum(QualityGroup == "Good"),
+      Bad        = sum(QualityGroup == "Bad"),
+      No_Outcome = sum(QualityGroup == "No Outcome"),
+      Rate       = round(Good / Total * 100, 1),
+      .groups    = "drop"
+    ) %>%
+    filter(Total >= min_n)
+}
+
+cat("Phase 6 setup complete. calc_quality_2d() ready.\n")
+
+```
+The calc_quality_2d() function extends Phase 5 single-dimension analysis into two-way combinations, grouping leads by two segments simultaneously and applying a minimum threshold of 10 leads per cell to exclude statistically unreliable intersections. Advertise.com is excluded from all partner combinations due to its 3-lead total, which produces meaningless rates at any intersection.
+
+
+## Partner × Debt Band
+```{r}
+partner_debt <- calc_quality_2d(base_data, Partner, DebtBand) %>%
+  filter(Partner != "Advertise.com")
+
+knitr::kable(
+  partner_debt %>% arrange(Partner, DebtBand),
+  caption = "Quality Rate: Partner × Debt Band (min 10 leads)"
+)
+
+ggplot(partner_debt, aes(x = DebtBand, y = Partner, fill = Rate)) +
+  geom_tile(color = "white", linewidth = 0.6) +
+  geom_text(aes(label = paste0(Rate, "%\n(n=", Total, ")")),
+            size = 2.8, color = "black") +
+  scale_fill_gradient2(
+    low = "#d73027", mid = "#ffffbf", high = "#1a9850",
+    midpoint = 13, name = "Quality\nRate (%)"
+  ) +
+  labs(
+    title    = "Quality Rate Heatmap: Partner × Debt Band",
+    subtitle = "Cells with fewer than 10 leads excluded | n = lead count per cell",
+    x = "Debt Band", y = "Partner"
+  ) +
+  theme_analyst +
+  theme(axis.text.x = element_text(angle = 35, hjust = 1))
+
+tbl_save_partner_debt <- base_data %>%
+  group_by(Partner, DebtBand) %>%
+  summarise(
+    Total = n(),
+    Good  = sum(QualityGroup == "Good"),
+    Bad   = sum(QualityGroup == "Bad"),
+    No_Outcome = sum(QualityGroup == "No Outcome"),
+    Rate  = round(Good / Total * 100, 1),
+    .groups = "drop"
+  ) %>%
+  filter(Total >= 10)
+
+write.csv(
+  tbl_save_partner_debt,
+  "C:/Users/sgpat/Documents/LeadQuality_CaseStudy/output/tables/table_partner_debtband.csv",
+  row.names = FALSE
+)
+
+```
+The most actionable finding in this entire analysis is the Google + Over 100K combination, which delivers only 4.7% quality rate from 107 leads, the lowest rate of any meaningful cell in the dataset and the only partner-debt combination that falls materially below the 9.6% target at volume. By contrast, Yahoo + 70K-90K produces 35.0% from 40 leads, and AdKnowledge + 50K-70K produces 40.0% from 10 leads, though both have limited sample size. For Google, the sweet spot is the 15K-20K band at 15.2% from 197 leads, making it the highest-volume, above-target cell within Google's portfolio. The practical recommendation: shift Google budget away from the Over 100K segment entirely.
+
+
+## Partner × Ad Type
+```{r}
+partner_adtype <- calc_quality_2d(base_data, Partner, ad_type) %>%
+  filter(Partner != "Advertise.com")
+
+knitr::kable(
+  partner_adtype %>% arrange(Partner, ad_type),
+  caption = "Quality Rate: Partner × Ad Type (min 10 leads)"
+)
+
+ggplot(partner_adtype, aes(x = ad_type, y = reorder(Partner, Rate), fill = Rate)) +
+  geom_tile(color = "white", linewidth = 0.6) +
+  geom_text(aes(label = paste0(Rate, "%\n(n=", Total, ")")),
+            size = 3.5, color = "black") +
+  scale_fill_gradient2(
+    low = "#d73027", mid = "#ffffbf", high = "#1a9850",
+    midpoint = 13, name = "Quality\nRate (%)"
+  ) +
+  labs(
+    title    = "Quality Rate Heatmap: Partner × Ad Type",
+    subtitle = "Branded vs Generic performance by traffic source",
+    x = "Ad Type", y = "Partner"
+  ) +
+  theme_analyst
+
+```
+The Branded vs Generic distinction matters significantly within Yahoo but not within Google. Yahoo Branded delivers 16.5% from 411 leads versus Yahoo Generic at 12.6% from 538 leads, a 3.9 percentage point gap at high volume. AdKnowledge Branded leads at 22.2% from 63 leads is the highest rate in this matrix. Google Branded underperforms Generic at 10.3% versus 11.9%, a reversal of the expected pattern, suggesting the CreditSolutions branded widget does not resonate as strongly with Google's traffic as it does with Yahoo's audience. Call Center has no Branded leads, confirming all Call Center traffic goes through Generic campaigns only.
+
+
+## Partner × Lead Source
+```{r}
+partner_source <- calc_quality_2d(base_data, Partner, lead_source) %>%
+  filter(Partner != "Advertise.com")
+
+knitr::kable(
+  partner_source %>% arrange(Partner, lead_source),
+  caption = "Quality Rate: Partner × Lead Source (min 10 leads)"
+)
+
+ggplot(partner_source, aes(x = lead_source, y = reorder(Partner, Rate), fill = Rate)) +
+  geom_tile(color = "white", linewidth = 0.6) +
+  geom_text(aes(label = paste0(Rate, "%\n(n=", Total, ")")),
+            size = 3.5, color = "black") +
+  scale_fill_gradient2(
+    low = "#d73027", mid = "#ffffbf", high = "#1a9850",
+    midpoint = 13, name = "Quality\nRate (%)"
+  ) +
+  labs(
+    title    = "Quality Rate Heatmap: Partner × Lead Source",
+    subtitle = "Online vs Call Center quality by traffic partner",
+    x = "Lead Source", y = "Partner"
+  ) +
+  theme_analyst
+
+```
+This matrix confirms structural data: AdKnowledge, Google, and Yahoo are exclusively Online partners, while Call Center operates as its own distinct channel with no overlap with other partners. There are no cross-partner, cross-source combinations to evaluate. The key analytical value here is confirming that Call Center's 17.9% quality rate is channel-specific and cannot be attributed to a particular advertising partner, meaning it is driven by the phone-based pre-screening process rather than traffic source quality.
+
+
+## Debt Band × Widget Design
+```{r}
+debt_widget <- calc_quality_2d(base_data, DebtBand, widget_design)
+
+knitr::kable(
+  debt_widget %>% arrange(DebtBand, widget_design),
+  caption = "Quality Rate: Debt Band × Widget Design (min 10 leads)"
+)
+
+ggplot(debt_widget, aes(x = DebtBand, y = widget_design, fill = Rate)) +
+  geom_tile(color = "white", linewidth = 0.6) +
+  geom_text(aes(label = paste0(Rate, "%\n(n=", Total, ")")),
+            size = 2.5, color = "black") +
+  scale_fill_gradient2(
+    low = "#d73027", mid = "#ffffbf", high = "#1a9850",
+    midpoint = 13, name = "Quality\nRate (%)"
+  ) +
+  labs(
+    title    = "Quality Rate Heatmap: Debt Band × Widget Design",
+    subtitle = "Cells with fewer than 10 leads excluded",
+    x = "Debt Band", y = "Widget Design"
+  ) +
+  theme_analyst +
+  theme(axis.text.x = element_text(angle = 35, hjust = 1))
+
+```
+The single most striking cell is YellowArrow Blue + 15K-20K at 37.5% quality rate from 24 leads. While the volume is modest, this is directionally meaningful. The structural finding is that CreditSolutions widget, which accounts for the majority of impressions across all debt bands, consistently underperforms in the Over 100K segment at 5.1% from 78 leads, confirming this combination as the primary drag on overall quality. The Standard widget performs well in mid-to-high debt bands: 18.5% in 30K-50K and 19.6% in 50K-70K, suggesting it resonates better with higher-intent, higher-debt prospects. Head3 should be deprioritised in Under 15K (4.2%) and YellowArrow Blue in Over 100K (0.0% from 15 leads).
+
+
+## Partner × State (Top 10 States)
+```{r}
+top_states <- base_data %>%
+  count(State) %>%
+  slice_max(n, n = 10) %>%
+  pull(State)
+
+partner_state <- base_data %>%
+  filter(State %in% top_states) %>%
+  calc_quality_2d(Partner, State) %>%
+  filter(Partner != "Advertise.com")
+
+knitr::kable(
+  partner_state %>% arrange(Partner, State),
+  caption = "Quality Rate: Partner × State - Top 10 States (min 10 leads)"
+)
+
+ggplot(partner_state, aes(x = State, y = Partner, fill = Rate)) +
+  geom_tile(color = "white", linewidth = 0.6) +
+  geom_text(aes(label = paste0(Rate, "%\n(n=", Total, ")")),
+            size = 2.5, color = "black") +
+  scale_fill_gradient2(
+    low = "#d73027", mid = "#ffffbf", high = "#1a9850",
+    midpoint = 13, name = "Quality\nRate (%)"
+  ) +
+  labs(
+    title    = "Quality Rate Heatmap: Partner × State (Top 10 States)",
+    subtitle = "Cells with fewer than 10 leads excluded",
+    x = "State", y = "Partner"
+  ) +
+  theme_analyst
+
+```
+AdKnowledge + California is the standout combination at 34.8% quality rate from 23 leads, more than double the overall baseline. Yahoo + California at 17.5% from 171 leads is the highest-volume, highest-quality intersection for California. Google + Maryland at 5.8% from 52 leads and Google + New York at 7.7% from 156 leads are the two highest-volume combinations below the 9.6% target, representing concentrated underperformance that is geographically actionable. Google + Texas at 14.4% from 181 leads is Google's strongest state, suggesting Texas-specific targeting adjustments could be a model for other states.
+
+
+# Phase 7: Hypothesis Testing
+
+## Setup
+```{r}
+library(broom)
+
+run_chisq <- function(df, var_name) {
+  tbl <- df %>%
+    filter(QualityGroup %in% c("Good", "Bad")) %>%
+    mutate(across(all_of(var_name), as.character)) %>%
+    count(.data[[var_name]], QualityGroup) %>%
+    pivot_wider(names_from = QualityGroup, values_from = n,
+                values_fill = 0) %>%
+    column_to_rownames(var_name) %>%
+    as.matrix()
+
+  prelim  <- suppressWarnings(chisq.test(tbl))
+  use_sim <- any(prelim$expected < 5)
+  test    <- chisq.test(tbl, simulate.p.value = use_sim, B = 2000)
+
+  tibble(
+    Variable    = var_name,
+    Chi_Square  = round(test$statistic, 3),
+    DF          = ifelse(use_sim, "Sim", as.character(test$parameter)),
+    P_Value     = round(test$p.value, 4),
+    Simulated   = use_sim,
+    Significant = ifelse(test$p.value < 0.05, "Yes ***", "No")
+  )
+}
+
+cat("Phase 7 setup complete. run_chisq() ready.\n")
+
+```
+The run_chisq() function tests whether the observed distribution of Good and Bad leads across categories differs significantly from what would be expected by chance. It automatically detects cells with expected counts below 5 and switches to Monte Carlo simulation with 2,000 iterations to ensure valid p-values. All tests use only Good and Bad leads as the denominator, excluding No Outcome rows, which is the correct approach for testing quality direction.
+
+## Chi-Square: Partner vs Quality
+```{r}
+chisq_partner <- run_chisq(base_data, "Partner")
+knitr::kable(chisq_partner,
+             caption = "Chi-Square Test: Partner vs Quality Group (Good/Bad only)")
+
+base_data %>%
+  filter(QualityGroup %in% c("Good", "Bad")) %>%
+  count(Partner, QualityGroup) %>%
+  pivot_wider(names_from = QualityGroup, values_from = n, values_fill = 0) %>%
+  mutate(Total = Good + Bad, Rate = round(Good / Total * 100, 1)) %>%
+  knitr::kable(caption = "Contingency Table: Partner × Quality")
+
+```
+The chi-square test for Partner versus quality outcome was conducted using Monte Carlo simulation because the Advertise.com cell had an expected count below 5. The result is p = 0.0785, which does not meet the conventional 0.05 significance threshold. However, this is a borderline result and should not be interpreted as "Partner has no effect." The directional differences observed in Phase 5 (AdKnowledge at 18.7% vs Google at 11.2%) are real and practically significant. The non-significance is partly driven by the small Advertise.com cell inflating noise. Partner remains a primary analytical dimension for recommendations.
+
+
+## Chi-Square: Debt Band vs Quality
+```{r}
+chisq_debt <- run_chisq(base_data, "DebtBand")
+knitr::kable(chisq_debt,
+             caption = "Chi-Square Test: Debt Band vs Quality Group")
+
+base_data %>%
+  filter(QualityGroup %in% c("Good", "Bad")) %>%
+  count(DebtBand, QualityGroup) %>%
+  pivot_wider(names_from = QualityGroup, values_from = n, values_fill = 0) %>%
+  mutate(Total = Good + Bad, Rate = round(Good / Total * 100, 1)) %>%
+  knitr::kable(caption = "Contingency Table: Debt Band × Quality")
+
+```
+Debt Band is the only variable in this analysis to achieve statistical significance, with a chi-square statistic of 24.33, 7 degrees of freedom, and p = 0.001. This confirms with strong statistical confidence that lead quality differs systematically across debt levels and that the variation observed in Phase 5 is not due to chance. The Over 100K band's 6.7% rate and the 70K-90K band's 20.2% rate reflect genuine structural differences in how different debtor profiles engage with this product. Debt band targeting is the single most statistically defensible lever in this dataset.
+
+
+## Chi-Square: Widget Design vs Quality
+```{r}
+chisq_widget <- run_chisq(base_data, "widget_design")
+knitr::kable(chisq_widget,
+             caption = "Chi-Square Test: Widget Design vs Quality Group")
+
+base_data %>%
+  filter(QualityGroup %in% c("Good", "Bad")) %>%
+  count(widget_design, QualityGroup) %>%
+  pivot_wider(names_from = QualityGroup, values_from = n, values_fill = 0) %>%
+  mutate(Total = Good + Bad, Rate = round(Good / Total * 100, 1)) %>%
+  knitr::kable(caption = "Contingency Table: Widget Design × Quality")
+
+```
+Widget design does not reach statistical significance at p = 0.0879. This is a borderline result, similar to Partner, and should not be treated as confirmation that widget design is irrelevant. The Head3 widget's 6.9% quality rate and BlueMeter's 65.8% rate within the Good/Bad pool are directionally meaningful. The lack of significance is partly attributable to small cell sizes in several widget categories (Head3 n=12, YellowArrow n=21). With larger samples, widget design would likely reach significance.
+
+
+## Chi-Square: Ad Type vs Quality
+```{r}
+chisq_adtype <- run_chisq(base_data, "ad_type")
+knitr::kable(chisq_adtype,
+             caption = "Chi-Square Test: Ad Type vs Quality Group")
+
+base_data %>%
+  filter(QualityGroup %in% c("Good", "Bad")) %>%
+  count(ad_type, QualityGroup) %>%
+  pivot_wider(names_from = QualityGroup, values_from = n, values_fill = 0) %>%
+  mutate(Total = Good + Bad, Rate = round(Good / Total * 100, 1)) %>%
+  knitr::kable(caption = "Contingency Table: Ad Type × Quality")
+
+```
+The chi-square statistic for Ad Type is 0.000 with p = 1.000, the most clear-cut non-significant result in the analysis. This statistically confirms what Phase 5 showed visually: Branded and Generic ads produce identical quality distributions. Ad type alone carries zero information about whether a lead will be Good or Bad. This finding rules out ad type as a standalone optimisation lever and reinforces that its value, if any, lies only in interaction with other variables as seen in Phase 6.
+
+
+## Chi-Square: Lead Source vs Quality
+```{r}
+chisq_source <- run_chisq(base_data, "lead_source")
+knitr::kable(chisq_source,
+             caption = "Chi-Square Test: Lead Source vs Quality Group")
+
+base_data %>%
+  filter(QualityGroup %in% c("Good", "Bad")) %>%
+  count(lead_source, QualityGroup) %>%
+  pivot_wider(names_from = QualityGroup, values_from = n, values_fill = 0) %>%
+  mutate(Total = Good + Bad, Rate = round(Good / Total * 100, 1)) %>%
+  knitr::kable(caption = "Contingency Table: Lead Source × Quality")
+
+```
+Lead Source is not statistically significant at p = 0.9487. Despite Call Center's higher headline rate of 17.9% in Phase 5, when No Outcome leads are excluded and only Good vs Bad outcomes are compared, Call Center and Online have virtually identical distributions (47.1% vs 45.5% Good within contacted leads). This means the Call Center quality advantage in Phase 5 is driven primarily by its lower No Outcome rate, not by fundamentally different conversion quality among the leads that were actually contacted.
+
+
+## Chi-Square: Day of Week vs Quality
+```{r}
+chisq_dow <- run_chisq(base_data, "lead_dow")
+knitr::kable(chisq_dow,
+             caption = "Chi-Square Test: Day of Week vs Quality Group")
+
+base_data %>%
+  filter(QualityGroup %in% c("Good", "Bad")) %>%
+  count(lead_dow, QualityGroup) %>%
+  pivot_wider(names_from = QualityGroup, values_from = n, values_fill = 0) %>%
+  mutate(Total = Good + Bad, Rate = round(Good / Total * 100, 1)) %>%
+  arrange(lead_dow) %>%
+  knitr::kable(caption = "Contingency Table: Day of Week × Quality")
+
+```
+Day of week is not statistically significant at p = 0.7226, confirming it as a low-priority dimension. The variation observed in Phase 5 (10.4% on Sunday to 14.8% on Monday) reflects normal random variation rather than a systematic day-of-week effect on lead quality. Day of week scheduling adjustments are not warranted by this data.
+
+
+## Spearman Correlation: Monthly Trend
+```{r}
+monthly_trend <- base_data %>%
+  group_by(lead_month_label) %>%
+  summarise(
+    Total = n(),
+    Good  = sum(QualityGroup == "Good"),
+    Rate  = round(Good / Total * 100, 2),
+    .groups = "drop"
+  ) %>%
+  arrange(lead_month_label) %>%
+  mutate(month_index = row_number())
+
+spearman_result <- cor.test(
+  monthly_trend$month_index,
+  monthly_trend$Rate,
+  method = "spearman",
+  exact  = FALSE
+)
+
+cat("Spearman rho:", round(spearman_result$estimate, 4), "\n")
+cat("p-value:", round(spearman_result$p.value, 4), "\n")
+cat("Interpretation:",
+    ifelse(spearman_result$p.value < 0.05,
+           "Significant monotonic trend detected",
+           "No statistically significant monotonic trend"), "\n")
+
+knitr::kable(monthly_trend,
+             caption = "Monthly Quality Rate with Month Index")
+
+ggplot(monthly_trend, aes(x = month_index, y = Rate)) +
+  geom_point(size = 4, color = "#2C7BB6") +
+  geom_smooth(method = "lm", se = TRUE, color = "#d73027",
+              linetype = "dashed") +
+  geom_text(aes(label = lead_month_label), vjust = -1.2, size = 3.2) +
+  geom_hline(yintercept = TARGET, linetype = "dashed",
+             color = "grey50", linewidth = 0.8) +
+  annotate("text", x = 1, y = TARGET + 0.5,
+           label = paste0("Target: ", TARGET, "%"),
+           color = "grey50", size = 3, hjust = 0) +
+  labs(
+    title    = "Monthly Quality Rate with Linear Trend",
+    subtitle = paste0("Spearman rho = ",
+                      round(spearman_result$estimate, 3),
+                      " | p = ",
+                      round(spearman_result$p.value, 3)),
+    x = "Month Index (1 = April, 6 = September)",
+    y = "Quality Rate (%)"
+  ) +
+  theme_analyst
+
+```
+The Spearman rank correlation between month index and quality rate is rho = 0.143 with p = 0.787. There is no statistically significant monotonic trend in quality over the 6-month period. Quality neither improved nor declined in a consistent direction from April to September 2009. The fluctuation between 8.7% in July and 16.9% in September reflects month-to-month variation in lead mix rather than any directional shift in campaign performance. This 13.0% figure is the broad quality rate (Good = Closed + EP steps). The Phase 8 business impact analysis uses Closed-only leads as the contract metric, which produces an 8.09% baseline.
+
+
+## Mann-Whitney U: Verify Score vs Quality
+```{r}
+good_scores <- base_data %>%
+  filter(QualityGroup == "Good", !is.na(verify_score)) %>%
+  pull(verify_score)
+
+bad_scores <- base_data %>%
+  filter(QualityGroup == "Bad", !is.na(verify_score)) %>%
+  pull(verify_score)
+
+wt_result <- wilcox.test(good_scores, bad_scores,
+                          alternative = "two.sided")
+
+cat("Good leads with verify_score:", length(good_scores), "\n")
+cat("Bad leads with verify_score:", length(bad_scores), "\n")
+cat("Median verify_score - Good:", median(good_scores), "\n")
+cat("Median verify_score - Bad:", median(bad_scores), "\n")
+cat("Mann-Whitney U p-value:", round(wt_result$p.value, 4), "\n")
+cat("Significant:", ifelse(wt_result$p.value < 0.05, "Yes", "No"), "\n")
+
+base_data %>%
+  filter(!is.na(verify_score), QualityGroup %in% c("Good", "Bad")) %>%
+  ggplot(aes(x = QualityGroup, y = verify_score, fill = QualityGroup)) +
+  geom_boxplot(alpha = 0.7, outlier.shape = 16) +
+  scale_fill_manual(
+    values = c("Good" = "#1a9850", "Bad" = "#d73027"),
+    guide  = "none"
+  ) +
+  labs(
+    title    = "Verification Score Distribution: Good vs Bad Leads",
+    subtitle = paste0("Mann-Whitney U test | p = ",
+                      round(wt_result$p.value, 4)),
+    x = "Quality Group",
+    y = "Verify Score (1-5)"
+  ) +
+  theme_analyst
+
+ggsave(
+  "C:/Users/sgpat/Documents/LeadQuality_CaseStudy/output/charts/chart_verifyscore_box.png",
+  width = 6, height = 4, dpi = 150
+)
+
+```
+This is the second statistically significant result in Phase 7. Good leads have a median verify_score of 5.0 versus 4.0 for Bad leads, and the Mann-Whitney U test confirms this difference is highly significant at p = 0.0003. Leads with higher combined address and phone verification scores are significantly more likely to be Good quality. This has a direct operational implication: using verify_score as a real-time pre-filter at the point of lead acceptance could improve quality rates without reducing volume from the existing traffic mix. The 1,628 leads (53.9%) missing verify_score are the limiting factor in deploying this as a current operational rule.
+
+
+## Statistical Summary
+```{r}
+stat_summary <- bind_rows(
+  chisq_partner,
+  chisq_debt,
+  chisq_widget,
+  chisq_adtype,
+  chisq_source,
+  chisq_dow
+) %>%
+  arrange(P_Value)
+
+knitr::kable(
+  stat_summary,
+  caption = "Phase 7: Chi-Square Results - All Variables Ranked by P-Value"
+)
+
+cat("\nSpearman Monthly Trend:\n")
+cat("  rho =", round(spearman_result$estimate, 4), "\n")
+cat("  p   =", round(spearman_result$p.value, 4), "\n")
+
+cat("\nMann-Whitney Verify Score (Good vs Bad):\n")
+cat("  p   =", round(wt_result$p.value, 4), "\n")
+
+tbl_save_stats <- data.frame(
+  Variable    = c("Partner", "Debt Band", "Widget Design",
+                  "Ad Type", "Lead Source", "Day of Week", "Verify Score"),
+  Test        = c("Chi-Square (Monte Carlo)", "Chi-Square", "Chi-Square",
+                  "Chi-Square", "Chi-Square", "Chi-Square", "Mann-Whitney U"),
+  P_Value     = c(0.0785, 0.001, 0.0879, NA, NA, NA, 0.0003),
+  Significant = c("No", "Yes ***", "No", NA, NA, NA, "Yes ***")
+)
+
+write.csv(
+  tbl_save_stats,
+  "C:/Users/sgpat/Documents/LeadQuality_CaseStudy/output/tables/table_stat_summary.csv",
+  row.names = FALSE
+)
+
+```
+Two variables are statistically significant: Debt Band (p = 0.001) and Verify Score (p = 0.0003). Partner and Widget Design are borderline non-significant at p = 0.079 and p = 0.088 respectively, and retain practical analytical importance. Ad Type, Lead Source, Day of Week, and the monthly trend are all firmly non-significant and should not be the focus of operational recommendations. The combination of statistically confirmed Debt Band effects and a highly significant Verify Score relationship provides the evidentiary foundation needed to make defensible, data-backed recommendations in Phase 9.
+
+
+# Phase 8: Business Impact Analysis
+
+```{r}
+# Assignment-confirmed parameters
+CPL_current  <- 30
+CPL_target   <- 33
+q_baseline   <- 8.0
+q_target     <- 9.6
+
+# Base counts from non-duplicate leads
+total_base   <- nrow(base_data)
+
+# Closed leads = assignment's business quality metric
+# CallStatus == "Closed" is still in clean_data (not overwritten in Phase 3)
+closed_leads <- base_data %>%
+  filter(CallStatus == "Closed") %>%
+  nrow()
+
+closed_rate  <- round(closed_leads / total_base * 100, 2)
+
+cat("=== Business Parameters ===\n")
+cat("Current CPL:           $", CPL_current, "\n")
+cat("Target CPL:            $", CPL_target, "\n")
+cat("Assignment baseline:    ", q_baseline, "%\n")
+cat("Assignment target:      ", q_target, "%\n")
+cat("Total non-dup leads:   ", total_base, "\n")
+cat("Closed leads:          ", closed_leads, "\n")
+cat("Observed closed rate:  ", closed_rate, "%\n")
+cat("Note: Good (Phase 5) = Closed + EP steps =",
+    sum(base_data$QualityGroup == "Good"),
+    "leads (", round(sum(base_data$QualityGroup == "Good") / total_base * 100, 1), "%)\n")
+
+```
+
+
+## Business Parameters
+```{r}
+revenue_current <- total_base * CPL_current
+
+monthly_leads <- base_data %>%
+  count(lead_month_label) %>%
+  mutate(
+    monthly_revenue = n * CPL_current,
+    monthly_closed  = round(n * (closed_rate / 100))
+  ) %>%
+  rename(Total_Leads = n)
+
+knitr::kable(
+  monthly_leads %>%
+    mutate(monthly_revenue = paste0("$", formatC(monthly_revenue,
+                                                  format = "f",
+                                                  digits = 0,
+                                                  big.mark = ","))),
+  caption = "Monthly Lead Volume and Revenue at Current $30 CPL"
+)
+
+cat("Total revenue at current CPL ($30):",
+    paste0("$", formatC(revenue_current, format = "f",
+                        digits = 0, big.mark = ",")), "\n")
+
+```
+The analysis confirmed the observed closed rate from the clean dataset is 8.09% (231 Closed leads from 2,857 non-duplicate leads), which aligns precisely with the assignment's stated 8.0% baseline, validating the data pipeline from Phases 1 through 4. The distinction between Phase 5's "Good" quality rate (13.0%, which includes EP Sent, Received, and Confirmed alongside Closed) and the assignment's business metric (Closed only at 8.09%) is correctly separated here. Phase 8 uses Closed only as the revenue-relevant metric because, as the assignment states, the advertiser does not generate revenue unless a lead becomes a customer.
+
+## Current Revenue Baseline
+```{r}
+revenue_current <- total_base * CPL_current
+
+monthly_leads <- base_data %>%
+  count(lead_month_label) %>%
+  mutate(
+    monthly_revenue = n * CPL_current,
+    monthly_closed  = round(n * (closed_rate / 100))
+  ) %>%
+  rename(Total_Leads = n)
+
+knitr::kable(
+  monthly_leads %>%
+    mutate(monthly_revenue = paste0("$", formatC(monthly_revenue,
+                                                  format = "f",
+                                                  digits = 0,
+                                                  big.mark = ","))),
+  caption = "Monthly Lead Volume and Revenue at Current $30 CPL"
+)
+
+cat("Total revenue at current CPL ($30):",
+    paste0("$", formatC(revenue_current, format = "f",
+                        digits = 0, big.mark = ",")), "\n")
+
+```
+The 6-month revenue at the current $30 CPL totals $85,710 across 2,857 non-duplicate leads. Monthly revenue ranges from $9,930 in September (331 leads) to $17,100 in June (570 leads), tracking lead volume directly since CPL is fixed regardless of quality. The monthly closed lead count ranges from 27 in September to 46 in June. The revenue figure represents what the publisher is currently earning from the advertiser under the existing contract terms.
+
+## Target Revenue and CPL Uplift
+```{r}
+revenue_target <- total_base * CPL_target
+revenue_uplift <- revenue_target - revenue_current
+
+# Closed leads needed to hit 9.6% target
+closed_needed  <- ceiling(total_base * (q_target / 100))
+closed_gap     <- closed_needed - closed_leads
+
+impact_table <- tibble(
+  Metric                  = c(
+    "Total Leads (non-duplicate)",
+    "Current Closed Leads",
+    "Current Closed Rate",
+    "Target Closed Rate",
+    "Additional Closed Leads Needed",
+    "Current CPL",
+    "Target CPL",
+    "Current Total Revenue",
+    "Target Total Revenue",
+    "Revenue Uplift"
+  ),
+  Value = c(
+    formatC(total_base,       format = "d", big.mark = ","),
+    formatC(closed_leads,     format = "d", big.mark = ","),
+    paste0(closed_rate, "%"),
+    paste0(q_target, "%"),
+    formatC(closed_gap,       format = "d", big.mark = ","),
+    paste0("$", CPL_current),
+    paste0("$", CPL_target),
+    paste0("$", formatC(revenue_current, format = "f", digits = 0, big.mark = ",")),
+    paste0("$", formatC(revenue_target,  format = "f", digits = 0, big.mark = ",")),
+    paste0("$", formatC(revenue_uplift,  format = "f", digits = 0, big.mark = ","))
+  )
+)
+
+knitr::kable(impact_table,
+             caption = "Business Impact: Revenue Uplift from Hitting 9.6% Quality Target")
+
+ggsave(
+  "C:/Users/sgpat/Documents/LeadQuality_CaseStudy/output/charts/chart_revenue_impact.png",
+  width = 8, height = 5, dpi = 150
+)
+
+```
+Hitting the 9.6% closed rate target would increase CPL from $30 to $33, generating $94,281 in revenue over the same 6-month lead volume, a direct uplift of $8,571. Annualised, this projects to $17,142 in additional revenue per year from the same traffic base without acquiring any additional leads. The gap to target is concrete: 44 additional Closed leads are needed above the current 231. Framed for a stakeholder: closing 44 more customers from the same 2,857 leads is worth $17,142 per year in incremental publisher revenue.
+
+## Segment-Level Closed Rate Analysis
+```{r}
+seg_closed_partner <- base_data %>%
+  filter(Partner != "Advertise.com") %>%
+  group_by(Partner) %>%
+  summarise(
+    Total       = n(),
+    Closed      = sum(CallStatus == "Closed"),
+    Closed_Rate = round(Closed / Total * 100, 1),
+    .groups     = "drop"
+  ) %>%
+  mutate(
+    vs_Target = round(Closed_Rate - q_target, 1),
+    Status    = if_else(Closed_Rate >= q_target, "Above Target", "Below Target")
+  ) %>%
+  arrange(desc(Closed_Rate))
+
+knitr::kable(seg_closed_partner,
+             caption = "Closed Rate by Partner vs 9.6% Target")
+
+seg_closed_debt <- base_data %>%
+  group_by(DebtBand) %>%
+  summarise(
+    Total       = n(),
+    Closed      = sum(CallStatus == "Closed"),
+    Closed_Rate = round(Closed / Total * 100, 1),
+    .groups     = "drop"
+  ) %>%
+  mutate(
+    vs_Target = round(Closed_Rate - q_target, 1),
+    Status    = if_else(Closed_Rate >= q_target, "Above Target", "Below Target")
+  ) %>%
+  arrange(DebtBand)
+
+knitr::kable(seg_closed_debt,
+             caption = "Closed Rate by Debt Band vs 9.6% Target")
+
+seg_closed_widget <- base_data %>%
+  group_by(widget_design) %>%
+  summarise(
+    Total       = n(),
+    Closed      = sum(CallStatus == "Closed"),
+    Closed_Rate = round(Closed / Total * 100, 1),
+    .groups     = "drop"
+  ) %>%
+  mutate(
+    vs_Target = round(Closed_Rate - q_target, 1),
+    Status    = if_else(Closed_Rate >= q_target, "Above Target", "Below Target")
+  ) %>%
+  arrange(desc(Closed_Rate))
+
+knitr::kable(seg_closed_widget,
+             caption = "Closed Rate by Widget Design vs 9.6% Target")
+
+```
+Only AdKnowledge (12.3%) and Call Center (9.7%) exceed the 9.6% closed rate target at partner level. Google at 7.6% and Yahoo at 7.8% are both below target, and combined they account for 2,549 of the 2,857 leads, meaning the two largest volume partners are the primary source of the quality gap. At debt band level, only 70K-90K (14.5%) and 90K-100K (10.3%) exceed the target. The Over 100K band at 3.3% is the single most damaging segment, sitting 6.3 percentage points below target. At widget level, only Head2 (12.8%) and BlueMeter (10.3%) clear the target. Head3 at 5.6% and YellowArrow Blue at 6.6% are the two worst performers.
+
+
+## Scenario: Remove Underperforming Segments
+```{r}
+# Scenario: Remove Google Over 100K leads
+scenario_remove_google_100k <- base_data %>%
+  filter(!(Partner == "Google" & DebtBand == "Over 100K"))
+
+sc1_total  <- nrow(scenario_remove_google_100k)
+sc1_closed <- sum(scenario_remove_google_100k$CallStatus == "Closed")
+sc1_rate   <- round(sc1_closed / sc1_total * 100, 2)
+sc1_rev    <- sc1_total * CPL_target  # revenue at new CPL if target hit
+
+# Scenario: Remove Head3 widget
+scenario_remove_head3 <- base_data %>%
+  filter(widget_design != "Head3")
+
+sc2_total  <- nrow(scenario_remove_head3)
+sc2_closed <- sum(scenario_remove_head3$CallStatus == "Closed")
+sc2_rate   <- round(sc2_closed / sc2_total * 100, 2)
+
+# Scenario: Remove both Google Over 100K AND Head3
+scenario_combined <- base_data %>%
+  filter(
+    !(Partner == "Google" & DebtBand == "Over 100K"),
+    widget_design != "Head3"
+  )
+
+sc3_total  <- nrow(scenario_combined)
+sc3_closed <- sum(scenario_combined$CallStatus == "Closed")
+sc3_rate   <- round(sc3_closed / sc3_total * 100, 2)
+sc3_rev    <- sc3_total * CPL_target
+
+scenario_table <- tibble(
+  Scenario = c(
+    "Baseline (all leads)",
+    "Remove Google + Over 100K",
+    "Remove Head3 widget",
+    "Remove both (Google Over 100K + Head3)"
+  ),
+  Total_Leads  = c(total_base,  sc1_total,  sc2_total,  sc3_total),
+  Closed_Leads = c(closed_leads, sc1_closed, sc2_closed, sc3_closed),
+  Closed_Rate  = c(closed_rate,  sc1_rate,   sc2_rate,   sc3_rate),
+  Target_Hit   = c(
+    ifelse(closed_rate >= q_target, "Yes", "No"),
+    ifelse(sc1_rate    >= q_target, "Yes", "No"),
+    ifelse(sc2_rate    >= q_target, "Yes", "No"),
+    ifelse(sc3_rate    >= q_target, "Yes", "No")
+  )
+)
+
+knitr::kable(scenario_table,
+             caption = "Scenario Analysis: Impact of Removing Underperforming Segments on Closed Rate")
+
+
+
+```
+This is the most important section in Phase 8. None of the three removal scenarios reach the 9.6% target:
+
+
+- Remove Google + Over 100K: 8.29% from 2,750 leads
+
+- Remove Head3 widget: 8.15% from 2,785 leads
+
+- Remove both: 8.36% from 2,679 leads
+
+The implication is direct: passive removal of underperforming segments improves quality by only 0.2 to 0.3 percentage points. The remaining 1.24 percentage point gap to the target can only be closed through active mix improvement. This finding makes Recommendations 3 (scale AdKnowledge) and 4 (verify score filter) non-negotiable, not optional enhancements.
+
+## Revenue Gap by Partner
+```{r}
+partner_revenue <- base_data %>%
+  filter(Partner != "Advertise.com") %>%
+  group_by(Partner) %>%
+  summarise(
+    Total         = n(),
+    Closed        = sum(CallStatus == "Closed"),
+    Closed_Rate   = round(Closed / Total * 100, 1),
+    Rev_Current   = Total * CPL_current,
+    Rev_At_Target = Total * CPL_target,
+    Rev_Uplift    = Rev_At_Target - Rev_Current,
+    .groups       = "drop"
+  ) %>%
+  arrange(desc(Total))
+
+knitr::kable(
+  partner_revenue %>%
+    mutate(
+      Rev_Current   = paste0("$", formatC(Rev_Current,   format = "f", digits = 0, big.mark = ",")),
+      Rev_At_Target = paste0("$", formatC(Rev_At_Target, format = "f", digits = 0, big.mark = ",")),
+      Rev_Uplift    = paste0("$", formatC(Rev_Uplift,    format = "f", digits = 0, big.mark = ","))
+    ),
+  caption = "Revenue by Partner: Current vs Target CPL"
+)
+
+ggplot(partner_revenue, aes(x = reorder(Partner, Total))) +
+  geom_col(aes(y = Rev_At_Target / 1000), fill = "#1a9850", alpha = 0.5, width = 0.6) +
+  geom_col(aes(y = Rev_Current   / 1000), fill = "#2C7BB6", width = 0.4) +
+  geom_text(aes(y = Rev_Current / 1000,
+                label = paste0(Closed_Rate, "% closed")),
+            hjust = -0.1, size = 3.2) +
+  coord_flip() +
+  labs(
+    title    = "Revenue by Partner: Current CPL (blue) vs Target CPL (green)",
+    subtitle = "Green = potential revenue at $33 CPL if 9.6% closed rate achieved",
+    x        = NULL,
+    y        = "Revenue ($000s)"
+  ) +
+  theme_analyst
+
+ggsave(
+  "C:/Users/sgpat/Documents/LeadQuality_CaseStudy/output/charts/chart_revenue_impact.png",
+  width = 8, height = 5, dpi = 150
+)
+
+```
+Google generates $48,000 of the total $85,710 in current revenue (56.0%), making it the largest revenue contributor despite its below-target quality rate of 7.6%. If Google reaches the 9.6% target, its revenue at the $33 CPL would be $52,800, an uplift of $4,800. Yahoo adds another $2,847 in potential uplift. AdKnowledge, despite its superior quality at 12.3%, contributes only $513 in potential uplift due to its low volume of 171 leads. This table makes the strategic tension explicit: Google is both the biggest problem and the biggest revenue driver. Any strategy that aggressively cuts Google traffic without replacing it with quality volume from AdKnowledge would reduce total revenue even as it raises quality rate.
+
+
+## Business Impact Summary
+```{r}
+biz_summary <- tibble(
+  Item  = c(
+    "6-Month Lead Volume (non-duplicate)",
+    "Current Closed Rate",
+    "Assignment Target Closed Rate",
+    "Closed Leads Gap to Target",
+    "Current 6-Month Revenue @ $30 CPL",
+    "Target 6-Month Revenue @ $33 CPL",
+    "6-Month Revenue Uplift",
+    "Annualised Revenue Uplift (x2)",
+    "Largest Underperforming Segment",
+    "Highest Performing Segment"
+  ),
+  Value = c(
+    formatC(total_base,    format = "d", big.mark = ","),
+    paste0(closed_rate,    "%"),
+    paste0(q_target,       "%"),
+    formatC(closed_gap,    format = "d", big.mark = ","),
+    paste0("$", formatC(revenue_current,    format = "f", digits = 0, big.mark = ",")),
+    paste0("$", formatC(revenue_target,     format = "f", digits = 0, big.mark = ",")),
+    paste0("$", formatC(revenue_uplift,     format = "f", digits = 0, big.mark = ",")),
+    paste0("$", formatC(revenue_uplift * 2, format = "f", digits = 0, big.mark = ",")),
+    "Google + Over 100K Debt",
+    "AdKnowledge + 70K-90K Debt"
+  )
+)
+
+knitr::kable(biz_summary,
+             caption = "Phase 8: Business Impact Summary")
+
+```
+The complete business case is: 2,857 leads, 231 Closed, 8.09% closed rate, 44 additional Closed leads needed, $8,571 in 6-month revenue uplift, $17,142 annualised. The largest underperforming segment is Google + Over 100K. The highest performing segment is AdKnowledge + 70K-90K. This summary table is the single table a stakeholder needs to understand the financial stakes of the recommendations.
+
+
+# Phase 9: Recommendations
+
+
+## Recommendation Framework
+```{r}
+rec_framework <- tibble(
+  Recommendation = c(
+    "R1: Reduce Google Over 100K traffic",
+    "R2: Reallocate budget from Head3 widget",
+    "R3: Scale AdKnowledge spend",
+    "R4: Implement Verify Score pre-filter",
+    "R5: Prioritise 70K-90K debt band targeting"
+  ),
+  Evidence = c(
+    "Google + Over 100K = 4.7% quality, lowest cell at volume",
+    "Head3 = 6.9% quality, only widget below target at volume",
+    "AdKnowledge = 18.7% quality vs 11.2% Google, 7.5pp gap",
+    "Mann-Whitney p=0.0003: higher verify score = better quality",
+    "70K-90K = 20.2% quality, highest debt band, statistically confirmed"
+  ),
+  Impact = c("High", "Medium", "High", "Medium", "Medium"),
+  Effort = c("Low", "Low", "Medium", "High", "Medium"),
+  Priority = c(1L, 2L, 3L, 4L, 5L)
+)
+
+knitr::kable(rec_framework,
+             caption = "Phase 9: Recommendation Priority Framework")
+
+ggplot(rec_framework,
+       aes(x = Effort, y = Impact,
+           label = paste0("R", Priority))) +
+  geom_point(aes(color = factor(Priority)), size = 12, alpha = 0.8) +
+  geom_text(color = "white", fontface = "bold", size = 4) +
+  scale_color_manual(
+    values = c("1" = "#d73027", "2" = "#fc8d59",
+               "3" = "#1a9850", "4" = "#2C7BB6",
+               "5" = "#756bb1"),
+    guide = "none"
+  ) +
+  scale_x_discrete(limits = c("Low", "Medium", "High")) +
+  scale_y_discrete(limits = c("Low", "Medium", "High")) +
+  labs(
+    title    = "Recommendation Priority Matrix: Impact vs Effort",
+    subtitle = "R1-R5 plotted by implementation effort and expected quality impact",
+    x = "Implementation Effort", y = "Business Impact"
+  ) +
+  theme_analyst
+
+ggsave(
+  "C:/Users/sgpat/Documents/LeadQuality_CaseStudy/output/charts/chart_priority_matrix.png",
+  width = 8, height = 6, dpi = 150
+)
+
+```
+Five recommendations are structured by priority, with R1 and R3 rated High Impact and R1 and R2 rated Low Effort, placing them in the top-right quadrant of the impact-effort matrix. The framework is evidence-anchored: every recommendation cites a specific phase, metric, and p-value or percentage point gap. R4 (verify score filter) is the only High Effort item, which reflects the reality that deploying a real-time API-based lead scoring filter requires system integration work that the other four recommendations do not.
+​
+
+## Recommendation 1: Scale AdKnowledge, Reduce Google Over 100K
+```{r}
+r1_data <- base_data %>%
+  filter(Partner %in% c("Google", "AdKnowledge")) %>%
+  group_by(Partner, DebtBand) %>%
+  summarise(
+    Total       = n(),
+    Good        = sum(QualityGroup == "Good"),
+    Closed      = sum(CallStatus == "Closed"),
+    Quality_Rate = round(Good   / Total * 100, 1),
+    Closed_Rate  = round(Closed / Total * 100, 1),
+    .groups     = "drop"
+  ) %>%
+  filter(Total >= 10)
+
+knitr::kable(r1_data,
+             caption = "R1 Evidence: Google vs AdKnowledge Quality by Debt Band")
+
+# Quantify the Over 100K Google drag
+google_100k <- base_data %>%
+  filter(Partner == "Google", DebtBand == "Over 100K") %>%
+  summarise(
+    Total       = n(),
+    Good        = sum(QualityGroup == "Good"),
+    Closed      = sum(CallStatus == "Closed"),
+    Quality_Rate = round(Good   / Total * 100, 1),
+    Closed_Rate  = round(Closed / Total * 100, 1)
+  )
+
+cat("Google + Over 100K segment:\n")
+cat("  Leads:        ", google_100k$Total, "\n")
+cat("  Quality Rate: ", google_100k$Quality_Rate, "%\n")
+cat("  Closed Rate:  ", google_100k$Closed_Rate, "%\n")
+cat("  vs target:    ", google_100k$Closed_Rate - q_target, "pp below target\n")
+
+```
+The R1 evidence table confirms the quality rate asymmetry at every debt band where both Google and AdKnowledge have sufficient volume. Google's Over 100K segment delivers 4.7% quality and 2.8% closed rate from 107 leads, the worst meaningful cell in the dataset at any combination. AdKnowledge, by contrast, achieves 12.3% closed rate overall versus Google's 7.6%, a gap of 4.7 percentage points at partner level. The specific operational recommendation is a budget reallocation: reduce Google's bid multipliers or keyword targeting for debt-related terms that over-index to the Over 100K segment, and redirect that spend to AdKnowledge campaigns targeting the 50K-90K debt range where AdKnowledge's performance advantage is greatest.
+
+## Recommendation 2: Reallocate Widget Budget from Head3
+```{r}
+r2_data <- base_data %>%
+  filter(widget_design %in% c("Head3", "BlueMeter", "Head2", "Standard")) %>%
+  group_by(widget_design) %>%
+  summarise(
+    Total        = n(),
+    Good         = sum(QualityGroup == "Good"),
+    Closed       = sum(CallStatus == "Closed"),
+    Quality_Rate = round(Good   / Total * 100, 1),
+    Closed_Rate  = round(Closed / Total * 100, 1),
+    .groups      = "drop"
+  ) %>%
+  arrange(desc(Quality_Rate))
+
+knitr::kable(r2_data,
+             caption = "R2 Evidence: Head3 vs Recommended Replacement Widgets")
+
+# If Head3 traffic was redirected to BlueMeter
+head3_leads     <- base_data %>% filter(widget_design == "Head3") %>% nrow()
+bluemeter_rate  <- base_data %>%
+  filter(widget_design == "BlueMeter") %>%
+  summarise(r = mean(QualityGroup == "Good")) %>%
+  pull(r)
+
+head3_rate <- mean(base_data$QualityGroup[base_data$widget_design == "Head3"] == "Good",
+                   na.rm = TRUE)
+extra_good <- round(head3_leads * (bluemeter_rate - head3_rate))
+
+cat("Head3 leads that could be redirected:", head3_leads, "\n")
+cat("BlueMeter quality rate:", round(bluemeter_rate * 100, 1), "%\n")
+cat("Head3 quality rate:", round(head3_rate * 100, 1), "%\n")
+cat("Estimated additional Good leads if redirected to BlueMeter:", extra_good, "\n")
+
+cat("Head3 leads that could be redirected:", head3_leads, "\n")
+cat("BlueMeter quality rate:", round(bluemeter_rate * 100, 1), "%\n")
+cat("Head3 quality rate:",
+    round(mean(base_data$QualityGroup[base_data$widget_design == "Head3"] == "Good") * 100, 1),
+    "%\n")
+
+```
+Head3 delivers a 5.6% closed rate and 6.9% quality rate from 72 leads, the only widget below the 9.6% target with meaningful volume. Head2 at 12.8% closed rate and BlueMeter at 10.3% are the two direct replacements. The action is a creative swap, not a volume change: impressions currently served by the Head3 widget are redirected to Head2 or BlueMeter without changing total lead volume. This is classified as Low Effort because it is a campaign configuration change, not a structural change to bidding strategy or data systems.
+​
+
+## Recommendation 3: Implement Verify Score Pre-Filter
+```{r}
+r3_data <- base_data %>%
+  filter(!is.na(verify_score)) %>%
+  mutate(
+    score_band = case_when(
+      verify_score >= 4.5 ~ "High (4.5-5.0)",
+      verify_score >= 3.0 ~ "Mid (3.0-4.4)",
+      TRUE                ~ "Low (1.5-2.9)"
+    ),
+    score_band = factor(score_band,
+                        levels = c("Low (1.5-2.9)",
+                                   "Mid (3.0-4.4)",
+                                   "High (4.5-5.0)"))
+  ) %>%
+  group_by(score_band) %>%
+  summarise(
+    Total        = n(),
+    Good         = sum(QualityGroup == "Good"),
+    Closed       = sum(CallStatus == "Closed"),
+    Quality_Rate = round(Good   / Total * 100, 1),
+    Closed_Rate  = round(Closed / Total * 100, 1),
+    .groups      = "drop"
+  )
+
+knitr::kable(r3_data,
+             caption = "R3 Evidence: Quality Rate by Verify Score Band")
+
+ggplot(r3_data, aes(x = score_band, y = Quality_Rate, fill = score_band)) +
+  geom_col(width = 0.6) +
+  geom_hline(yintercept = q_target, linetype = "dashed",
+             color = "red", linewidth = 0.8) +
+  geom_text(aes(label = paste0(Quality_Rate, "%")),
+            vjust = -0.5, size = 4, fontface = "bold") +
+  scale_fill_manual(
+    values = c("Low (1.5-2.9)"  = "#d73027",
+               "Mid (3.0-4.4)"  = "#fee08b",
+               "High (4.5-5.0)" = "#1a9850"),
+    guide = "none"
+  ) +
+  labs(
+    title    = "Quality Rate by Verify Score Band",
+    subtitle = "Dashed line = 9.6% target | Evidence for R3 pre-filter recommendation",
+    x = NULL, y = "Quality Rate (%)"
+  ) +
+  theme_analyst
+
+```
+The verify score analysis confirms a statistically significant quality gradient across score bands. The Mann-Whitney result (p = 0.0003) is the strongest statistical signal in the entire Phase 7 analysis, stronger than even the Debt Band chi-square result. Good leads have a median verify_score of 5.0 versus 4.0 for Bad leads.The operational recommendation is to set a minimum verify_score threshold of 4.5 as a real-time lead acceptance gate. A threshold of 3.0 is not defensible because Bad leads already have a median of 4.0, meaning most Bad leads would pass through unchecked. A threshold of 4.5 sits between the Good median (5.0) and Bad median (4.0), maximising separation between quality groups while preserving the majority of Good leads. The constraint is that 1,628 leads (53.9%) currently lack a verify_score because PhoneScore was introduced partway through the data collection period. Full deployment requires the verify score to be available at submission time for all new leads, which requires a data pipeline confirmation that both AddressScore and PhoneScore are being populated in real time.
+
+
+## Recommendation 4: Prioritise 70K–90K Debt Band
+```{r}
+r4_data <- base_data %>%
+  group_by(DebtBand) %>%
+  summarise(
+    Total        = n(),
+    Good         = sum(QualityGroup == "Good"),
+    Closed       = sum(CallStatus == "Closed"),
+    Quality_Rate = round(Good   / Total * 100, 1),
+    Closed_Rate  = round(Closed / Total * 100, 1),
+    Pct_of_Total = round(Total / nrow(base_data) * 100, 1),
+    .groups      = "drop"
+  ) %>%
+  arrange(DebtBand) %>%
+  mutate(Status = if_else(Quality_Rate >= q_target, "Above Target", "Below Target"))
+
+knitr::kable(r4_data,
+             caption = "R4 Evidence: Quality Rate and Volume by Debt Band")
+
+cat("70K-90K debt band share of total leads:",
+    r4_data$Pct_of_Total[r4_data$DebtBand == "70K-90K"], "%\n")
+cat("Quality rate uplift vs baseline:",
+    r4_data$Quality_Rate[r4_data$DebtBand == "70K-90K"] - 13.0,
+    "pp above overall baseline\n")
+
+```
+The 70K-90K debt band achieves 14.5% closed rate and 20.2% quality rate from 124 leads, the highest closed rate of any debt band by a margin of 4.2 percentage points over the next best (90K-100K at 10.3%). It is 4.9 percentage points above the 9.6% target. The Debt Band chi-square result (p = 0.001) provides the statistical confirmation that this difference is not random. The recommendation is to adjust keyword bidding and ad copy language to attract users in the $70,000 to $90,000 debt range, which in practice means targeting terms like "debt consolidation over 70000" or "settling large debt" rather than generic "debt relief" terms that disproportionately attract lower-debt, lower-quality leads.
+
+
+
+## Recommendation 5: Replicate Call Center Pre-Screening Online
+```{r}
+r5_data <- base_data %>%
+  group_by(lead_source) %>%
+  summarise(
+    Total         = n(),
+    Good          = sum(QualityGroup == "Good"),
+    Closed        = sum(CallStatus == "Closed"),
+    Bad           = sum(QualityGroup == "Bad"),
+    No_Outcome    = sum(QualityGroup == "No Outcome"),
+    Quality_Rate  = round(Good   / Total * 100, 1),
+    Closed_Rate   = round(Closed / Total * 100, 1),
+    No_Outcome_Rt = round(No_Outcome / Total * 100, 1),
+    .groups       = "drop"
+  )
+
+knitr::kable(r5_data,
+             caption = "R5 Evidence: Call Center vs Online Full Quality Profile")
+
+cat("Call Center No Outcome rate:",
+    r5_data$No_Outcome_Rt[r5_data$lead_source == "Call Center"], "%\n")
+cat("Online No Outcome rate:",
+    r5_data$No_Outcome_Rt[r5_data$lead_source == "Online"], "%\n")
+cat("No Outcome gap (pre-screening effect):",
+    r5_data$No_Outcome_Rt[r5_data$lead_source == "Online"] -
+      r5_data$No_Outcome_Rt[r5_data$lead_source == "Call Center"],
+    "pp\n")
+
+```
+
+The R5 evidence table shows Call Center's No Outcome rate is materially lower than Online's, which is the true mechanism behind Call Center's higher headline quality rate. When No Outcome leads are excluded and only contacted leads are compared (Phase 7, Section 8.6), Call Center and Online have virtually identical conversion rates (47.1% vs 45.5%). The Call Center advantage is entirely about pre-screening before entry, not about better conversion once contacted. The operational recommendation is to introduce a pre-submission qualification question online, such as a debt amount confirmation slider or a minimum income question, that mimics the verbal pre-screening a call center agent performs. This is the only recommendation that requires a product/UX change to the lead form itself.
+
+
+## Priority Action Table
+```{r}
+action_table <- tibble(
+  Priority    = 1:5,
+  Action      = c(
+    "Stop/reduce Google ads targeting Over 100K debt segment",
+    "Shift Head3 widget impressions to BlueMeter or Head2",
+    "Increase AdKnowledge budget, focus on 50K-90K debt bands",
+    "Deploy verifyscore 4.5 as real-time lead acceptance filter",
+    "Adjust keyword/ad copy to attract 70K-90K debt profile"
+  ),
+  Impact_Type = c(
+    "Remove drag: lifts overall closed rate immediately",
+    "Remove drag: replaces 6.9% widget with 14.4%+ widget",
+    "Add quality volume: 18.7% vs 11.2% for Google",
+    "Reduce bad leads at submission: improves pipeline quality",
+    "Shift lead mix toward highest-quality debt segment"
+  ),
+  Stat_Support = c(
+    "Phase 6: 4.7% quality at 107 leads, lowest cell at volume",
+    "Phase 5: Head3 only widget below target with n>50",
+    "Phase 7: Partner borderline sig (p=0.079), 7.5pp practical gap",
+    "Phase 7: Mann-Whitney p=0.0003, strongest stat result",
+    "Phase 7: DebtBand chi-sq p=0.001, only sig variable"
+  ),
+  Timeline    = c(
+    "Immediate (budget reallocation)",
+    "Immediate (creative swap)",
+    "30 days (campaign expansion)",
+    "60 days (API/system integration)",
+    "30 days (keyword bid adjustments)"
+  )
+)
+
+knitr::kable(action_table,
+             caption = "Phase 9: Prioritised Action Plan with Statistical Evidence")
+
+```
+The five actions are sequenced correctly for implementation: R1 and R2 are immediate campaign configuration changes executable within days, R3 and R5 require 30-day campaign and keyword adjustments, and R4 requires 60-day system integration for the real-time verify score filter. Together, if R1 (remove worst segment), R2 (remove worst widget), and R3 (scale AdKnowledge) are implemented simultaneously, the combined effect is estimated to close the majority of the 44-lead gap to the 9.6% target, with R4 and R5 providing the remaining push and long-term quality floor.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

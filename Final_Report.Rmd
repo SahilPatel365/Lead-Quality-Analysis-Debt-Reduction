@@ -1,0 +1,614 @@
+---
+title: "Lead Quality Analysis: Debt Reduction Case Study"
+author: "Sahil Patel"
+date: "March 2026"
+output:
+  word_document:
+    toc: true
+    toc_depth: 2
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo    = FALSE,
+  message = FALSE,
+  warning = FALSE,
+  fig.width  = 8,
+  fig.height = 5,
+  dpi = 150
+)
+
+library(tidyverse)
+library(knitr)
+library(readxl)
+library(scales)
+
+charts_dir <- "C:/Users/sgpat/Documents/LeadQuality_CaseStudy/output/charts"
+tables_dir <- "C:/Users/sgpat/Documents/LeadQuality_CaseStudy/output/tables"
+
+base_data <- read_excel(
+  "C:/Users/sgpat/Documents/LeadQuality_CaseStudy/data/clean_data_final.xlsx"
+) %>%
+  filter(is_duplicate_email == FALSE)
+```
+
+# Executive Summary
+
+## What This Analysis Covers
+
+This report analyses 2,857 unique debt reduction leads acquired over six months,
+from April to September 2009. The goal was to answer one question: why is lead
+quality below target, and what needs to change to fix it.
+
+The analysis covered nine phases: data profiling, quality assessment, cleaning,
+feature engineering, exploratory analysis, multi-variable analysis, statistical
+testing, business impact modelling, and final recommendations.
+
+## The Problem
+
+The advertiser pays $30 per lead (cost per lead, or CPL). The contract specifies
+a quality target of 9.6%, meaning at least 9.6 out of every 100 leads must
+convert to a closed customer.
+
+Current performance: **8.09%**.
+
+That is a gap of 44 additional closed leads required from the same traffic
+volume. The advertiser will increase CPL to $33 only when the 9.6% target is
+met. Until then, the publisher leaves revenue on the table with every lead
+batch delivered.
+
+## What the Data Showed
+
+Quality is not random. Four factors drive performance consistently across all
+six months.
+
+**Partner choice is the biggest lever.** AdKnowledge delivers a 12.3% closed
+rate. Google delivers 7.6%. Google accounts for 56% of all leads. That
+combination explains most of the quality gap.
+
+**Debt band determines intent.** Leads with debt between $70,000 and $90,000
+close at 14.5%. Leads with debt over $100,000 close at 3.3%. The over $100K
+segment is large (180 leads) and actively pulls the average down.
+
+**Widget design has a measurable effect.** The Head3 widget delivers a 5.6%
+closed rate from 72 leads. Every comparable widget outperforms it. Head2
+runs at 12.8%. BlueMeter runs at 14.4%.
+
+**Cutting bad segments is not enough.** Removing the worst partner segment and
+the worst widget together raises the closed rate to only 8.36%. The target
+requires active mix improvement, not just elimination.
+
+## Financial Impact
+
+| Metric | Current | At Target |
+|--------|---------|-----------|
+| Leads (6 months) | 2,857 | 2,857 |
+| Closed rate | 8.09% | 9.6% |
+| CPL | $30 | $33 |
+| 6-month revenue | $85,710 | $94,281 |
+| Revenue uplift | | +$8,571 |
+
+Annualised revenue uplift: **$17,142**. This gain comes from the same lead
+volume. No additional traffic spend is needed.
+
+## Top Three Actions to Take Now
+
+**1. Shift budget from Google Over 100K to AdKnowledge with a 70K to 90K debt
+focus.** This is the highest-impact change. AdKnowledge outperforms Google by
+4.7 percentage points at the closed rate level.
+
+**2. Remove Head3 widget from all campaigns.** Replace it with Head2 or
+BlueMeter. This is a creative swap, not a structural change. It takes days to
+implement.
+
+**3. Deploy a real-time verify score filter at lead submission.** Statistical
+testing confirmed verify score is the strongest quality predictor in the dataset
+(p = 0.0003). Setting a minimum threshold of 4.5 filters out low-verification 
+leads before they enter the pipeline. This threshold sits between the Good leads
+median of 5.0 and the Bad leads median of 4.0, maximising separation between 
+quality groups.
+
+## What This Report Covers Next
+
+Section 2 provides business context. Section 3 details the quality drivers with
+charts and tables. Section 4 presents the scenario analysis and revenue model.
+Section 5 covers all five recommendations with evidence, impact estimates, and
+timelines. Full technical output is in the appendix.
+
+
+---
+
+# 2. Business Context
+
+## The Setup
+
+A lead generation publisher acquires consumers interested in debt reduction
+services and sells those leads to an advertiser. The advertiser pays the
+publisher $30 for every lead delivered, regardless of outcome. That is the
+cost per lead, or CPL.
+
+The advertiser only generates revenue when a lead converts to a paying
+customer. A lead that never closes costs the advertiser $30 with zero return.
+This makes lead quality, not lead volume, the core business metric.
+
+## How Quality Is Measured
+
+Quality is defined as the closed rate: the percentage of delivered leads that
+convert to a closed customer.
+
+The current closed rate is 8.09%. The contract target is 9.6%. When the
+publisher consistently delivers at 9.6% or above, the advertiser increases
+CPL from $30 to $33. That $3 increase per lead across 2,857 leads generates
+$8,571 in additional revenue every six months.
+
+Note: the assignment brief describes the CPL increase as 20% (i.e., $30 to $33). The dollar
+figures are correct. The percentage label is not: $30 to $33 is a 10% increase in CPL. The 20%
+figure in the brief refers to the quality improvement (8.0% × 1.20 = 9.6%), not the CPL uplift.
+This analysis uses the correct dollar figures throughout.
+
+
+## Why This Analysis Was Needed
+
+The raw dataset contained 3,021 leads and a closed rate that appeared healthy
+on the surface. Once duplicates were removed and quality was measured at
+the segment level, the picture changed. Performance varied sharply across
+traffic sources, debt ranges, and ad formats.
+
+The publisher needed to know exactly which segments were pulling the average
+down, and whether those segments could be fixed or replaced. That is what
+this analysis answers.
+
+## What Success Looks Like
+
+One number: 9.6% closed rate, sustained across a full 6-month period.
+
+That number justifies the $33 CPL, delivers $17,142 in annualised incremental
+revenue, and demonstrates that the publisher can manage quality proactively,
+not just report it after the fact.
+
+---
+
+# 3. Dataset Overview
+
+## Source and Volume
+
+The raw dataset contained 3,021 leads submitted between April 2 and September
+30, 2009, covering exactly 181 days. Each row represents one consumer who
+submitted a debt reduction enquiry online or through a call center agent.
+The dataset recorded 24 variables per lead, covering lead identity, partner
+source, debt level, widget design, ad campaign, geographic location, and
+call center outcome.
+
+## Data Quality Issues Found and Fixed
+
+Eight issues were identified and resolved before any analysis was run. The
+three most material ones are listed below.
+
+| Issue | Impact | Fix Applied |
+|-------|--------|-------------|
+| Partner capitalisation: "google" and "Google" treated as two separate partners | Would have split Google's 53.6% share across two groups, distorting all partner comparisons | Standardised all Partner values using case_when() |
+| AddressScore and PhoneScore stored as text "NULL" instead of NA | Blocked numeric analysis and verification score calculation | Converted string "NULL" to NA, recast both columns to numeric |
+| 164 duplicate email addresses (5.4% of leads) | Double-counted consumers inflate lead volume and distort quality rates. 133 is the count of distinct email addresses appearing more than once. 164 is the count of all rows flagged as non-first occurrences. A single email appearing three times contributes 1 to the first count and 2 to the second. The 2,857 unique-lead base retains one row per email address and is the correct denominator for all quality calculations. | Flagged all duplicates, excluded from quality rate calculations |
+
+No records were dropped during cleaning. All 3,021 rows were retained.
+Duplicates were flagged, not deleted, so volume reporting remains accurate.
+
+## Clean Analysis Base
+
+After removing duplicate emails from quality rate calculations, the working
+base for all analysis in this report is **2,857 unique leads**. Of these:
+
+- 372 are Good quality (13.0% raw rate)
+- 443 are Bad quality (15.5%)
+- 2,042 have No Outcome (71.5%), meaning no call center follow-up was recorded
+
+The 13.0% figure is the broad quality rate and includes all EP pipeline leads alongside Closed leads. The contract closed rate, used in all business impact calculations, is 8.09%.
+
+All quality rates in this report use 2,857 as the denominator. This is the
+correct base for business performance measurement. The No Outcome group is
+included in the denominator because those leads were paid for at the full
+$30 CPL rate regardless of whether they were ever contacted.
+
+## Features Used in Analysis
+
+Eleven new variables were engineered from the raw data to enable segment-level
+analysis. The four most important ones used in this report are:
+
+- **QualityGroup:** Closed and EP pipeline leads (EP Sent, EP Received, EP Confirmed) = Good;
+contacted but non-converting outcomes = Bad; no call center contact = No Outcome.
+- **DebtBand:** 10 raw debt ranges collapsed into 8 clean ordered bands
+- **widget_design:** 14 raw widget strings simplified to 9 design categories
+- **verify_score:** Average of AddressScore and PhoneScore where both are
+  available (available for 46% of leads)
+
+---
+
+# 4. Key Findings
+
+## A. What Drives Lead Quality
+
+Three variables consistently separate high-quality leads from low-quality
+leads across all six months of data. Partner, debt band, and widget design
+each show material differences that are large enough to act on.
+
+### Finding 1: Partner Is the Biggest Lever
+
+AdKnowledge delivers the highest quality rate at 18.7%. Google delivers 11.2%.
+Google accounts for 56% of all unique leads. That combination, high volume
+at below-target quality, explains the majority of the gap between the current
+8.09% closed rate and the 9.6% target.
+
+The 7.5 percentage point gap between AdKnowledge and Google is not noise.
+At Google's volume of 1,600 leads, that gap represents roughly 120 missed
+good leads per 6-month period.
+
+```{r fig.cap = "Quality Rate by Partner. Dashed line = 9.6% target."}
+knitr::include_graphics(
+  "C:/Users/sgpat/Documents/LeadQuality_CaseStudy/output/charts/chart_partner_quality.png"
+)
+```
+
+---
+
+### Finding 2: Debt Band Determines Consumer Intent
+
+Leads with debt between $70,000 and $90,000 achieve a quality rate of 20.2%, the highest of any segment. Leads with debt over $100,000 achieve a quality rate of 6.7%, the lowest rate, and they account for 180 leads, a large enough
+segment to pull the overall average down measurably.
+
+The mid-range bands of $20,000 to $30,000 and $50,000 to $70,000 both
+perform at 15.9%. The Under $15K band, which is the largest segment at 940
+leads, runs at 11.3%, above target but with room to improve through mix
+rebalancing.
+
+```{r fig.cap = "Quality Rate by Debt Band. Ordered low to high debt. Dashed line = 9.6% target."}
+knitr::include_graphics(
+  "C:/Users/sgpat/Documents/LeadQuality_CaseStudy/output/charts/chart_debtband_quality.png"
+)
+```
+
+---
+
+### Finding 3: Widget Design Has a Measurable Effect
+
+Head3 is the only widget below the 9.6% target with enough volume to be
+meaningful. It delivers a 6.9% quality rate from 72 leads. Head2 runs at
+16.3% from 86 leads. BlueMeter runs at 14.4% from 174 leads. The dominant
+widget, CreditSolutions, runs at 13.1% across 1,196 leads and performs
+above target.
+
+Replacing Head3 with Head2 or BlueMeter is a configuration change. It does
+not require any new traffic or additional spend.
+
+```{r fig.cap = "Quality Rate by Widget Design. Dashed line = 9.6% target."}
+knitr::include_graphics(
+  "C:/Users/sgpat/Documents/LeadQuality_CaseStudy/output/charts/chart_widget_quality.png"
+)
+```
+
+---
+
+## B. Statistical Proof
+
+Six variables were tested for statistical association with lead quality.
+The table below shows the results.
+
+| Variable       | Test                      | P-Value | Significant    |
+|:---------------|:--------------------------|--------:|:---------------|
+| Verify Score   | Mann-Whitney U            | 0.0003  | Yes ***        |
+| Debt Band      | Chi-Square                | 0.0010  | Yes ***        |
+| Partner        | Chi-Square (Monte Carlo)  | 0.0785  | No             |
+| Widget Design  | Chi-Square                | 0.0879  | No             |
+| Day of Week    | Chi-Square                | 0.7226  | No             |
+| Lead Source    | Chi-Square                | 0.9487  | No             |
+| Ad Type        | Chi-Square                | 1.0000  | No             |
+
+: Statistical Significance: All Variables Tested (p < 0.05 threshold)
+
+
+
+
+Verify score is the strongest signal in the dataset (p = 0.0003). Debt band
+is confirmed significant (p = 0.001). Partner and widget design are
+borderline, meaning the practical effect size is real but the sample size
+limits statistical certainty at the 0.05 threshold.
+
+Ad type, lead source, and day of week show no statistically significant
+relationship with quality. These variables do not warrant targeting changes.
+
+```{r fig.cap = "Verify Score distribution by Quality Group. Good leads score consistently higher."}
+knitr::include_graphics(
+  "C:/Users/sgpat/Documents/LeadQuality_CaseStudy/output/charts/chart_verifyscore_box.png"
+)
+```
+
+---
+
+## C. Business Impact
+
+### The Revenue Gap
+
+At the current closed rate of 8.09%, the publisher earns $30 per lead across
+2,857 leads, generating $85,710 over six months. Reaching the 9.6% target
+justifies a CPL increase to $33, generating $94,281 from the same lead
+volume. The uplift is $8,571 per six months, or $17,142 annualised.
+
+```{r fig.cap = "Revenue by Partner: current $30 CPL (blue) vs target $33 CPL (green) if 9.6% closed rate is achieved."}
+knitr::include_graphics(
+  "C:/Users/sgpat/Documents/LeadQuality_CaseStudy/output/charts/chart_revenue_impact.png"
+)
+```
+
+
+---
+
+### The Critical Constraint
+
+A natural first instinct is to cut the worst-performing segments and see if
+the quality rate improves. The scenario analysis below tests exactly that.
+
+| Scenario                     | Total Leads | Closed Leads | Closed Rate (%) |
+|:-----------------------------|------------:|-------------:|----------------:|
+| Baseline (all leads)         | 2,857       | 231          | 8.09            |
+| Remove Google Over 100K      | 2,750       | 228          | 8.29            |
+| Remove Head3 widget          | 2,785       | 227          | 8.15            |
+| Remove both                  | 2,679       | 224          | 8.36            |
+
+: Scenario Analysis: Impact of Removing Underperforming Segments
+
+
+
+Removing both the worst partner segment and the worst widget raises the
+closed rate to only 8.36%. The 9.6% target still requires 1.24 percentage
+points of improvement beyond what elimination alone can deliver.
+
+Passive removal is not the answer. Active mix improvement through all five
+recommendations is required. Section 5 details exactly how to get there.
+
+
+---
+
+# 5. Recommendations
+
+Five recommendations follow directly from the findings. Each one has a
+specific evidence base, a clear action, an estimated lead impact, and a
+realistic timeline. Together they close the 1.24 percentage point gap that
+passive removal alone cannot reach.
+
+## Priority Overview
+
+```{r fig.cap = "Recommendation Priority Matrix: Impact vs Implementation Effort."}
+knitr::include_graphics(
+  "C:/Users/sgpat/Documents/LeadQuality_CaseStudy/output/charts/chart_priority_matrix.png"
+)
+```
+
+R1 and R2 are the immediate priorities. They require no system changes,
+only configuration and creative updates. R4 and R5 follow in weeks 3 to 4.
+R3 requires the longest lead time due to system integration but delivers
+the most durable quality floor.
+
+---
+
+```{r}
+tbl <- read.csv(
+  "C:/Users/sgpat/Documents/LeadQuality_CaseStudy/output/tables/table_partner_debtband.csv"
+)
+tbl_r1 <- tbl[tbl$Partner %in% c("Google", "AdKnowledge") &
+              tbl$DebtBand %in% c("70K-90K", "Over 100K", "50K-70K"), ]
+knitr::kable(tbl_r1,
+             caption   = "Quality Rate: Google vs AdKnowledge in Key Debt Bands",
+             row.names = FALSE)
+```
+
+
+Google's Over 100K segment runs at 4.7%, the lowest rate of any meaningful
+partner-debt combination in the dataset. AdKnowledge consistently
+outperforms Google across every debt band it serves.
+
+**The action:**
+
+1. Add negative keyword exclusions in Google campaigns for debt-related
+   queries where the consumer indicates debt over $100,000
+2. Reallocate the freed budget to AdKnowledge campaigns targeting the
+   $50,000 to $90,000 debt range
+
+**Estimated impact:** 15 to 20 additional Good leads per 6-month period
+
+**Timeline:** Week 1 to 2. Configuration changes only. No development work
+required.
+
+---
+
+```{r}
+tbl <- read.csv(
+  "C:/Users/sgpat/Documents/LeadQuality_CaseStudy/output/tables/table_widget_quality.csv"
+)
+knitr::kable(tbl, caption = "Quality Rate by Widget Design")
+```
+
+
+Head3 is the only widget below the 9.6% target with enough volume to be
+meaningful. Every other widget outperforms it by at least 3.5 percentage
+points.
+
+**The action:**
+
+1. Stop serving Head3 across all traffic partners immediately
+2. Redirect those impressions to Head2 as the primary replacement, with
+   BlueMeter as the secondary option
+
+**Estimated impact:** 5 additional Good leads per 6-month period.
+Calculation: 72 leads × (14.4% BlueMeter rate - 6.9% Head3 rate) = 5.4
+leads, rounded to 5.
+
+**Timeline:** Week 1 to 2. Creative swap only.
+
+---
+
+## R3: Deploy Verify Score Pre-Filter at Lead Submission
+
+**The evidence:**
+
+Mann-Whitney U test confirmed verify score is the strongest quality
+predictor in the entire dataset (p = 0.0003). Setting a minimum threshold of 4.5
+filters out low-verification leads before they enter the pipeline. This 
+threshold sits between the Good leads median of 5.0 and the Bad leads median of 
+4.0, maximising separation between quality groups.
+
+| Verify Score Group | Median Score | Relative Quality |
+|-------------------|-------------|-----------------|
+| Good leads | 5.0 | High verification |
+| Bad leads | 4.0 | Lower verification |
+| No Outcome leads | 4.0 | Mixed |
+
+**The action:**
+
+1. Integrate AddressScore and PhoneScore as real-time API calls at lead
+   submission, before the lead enters the publisher pipeline
+2. Set minimum verify score threshold at 4.5. Statistical output shows Good 
+leads have a median verify score of 5.0 and Bad leads have a median of 4.0. A 
+threshold of 3.0 would not filter most Bad leads because their median already 
+sits at 4.0. A threshold of 4.5 sits between the two medians and maximises 
+separation between quality groups while preserving the majority of Good leads. 
+Leads scoring below 4.5 are rejected or re-routed before the advertiser is 
+billed.
+
+**Estimated impact:** 8 to 12 additional Good leads per 6-month period by
+eliminating the lowest-verification leads from the paid pipeline.
+
+**Timeline:** Week 5 to 8. Requires data pipeline confirmation that both
+AddressScore and PhoneScore are available in real time. This is the only
+recommendation that needs engineering resource.
+
+**Constraint:** Verify score is currently available for 46% of leads only,
+because PhoneScore was introduced mid-period. Full deployment requires
+consistent data population going forward.
+
+---
+
+```{r}
+tbl <- read.csv(
+  "C:/Users/sgpat/Documents/LeadQuality_CaseStudy/output/tables/table_debtband_quality.csv"
+)
+knitr::kable(tbl, caption = "Quality Rate by Debt Band")
+```
+
+
+Chi-square test confirms debt band is statistically significant (p = 0.001).
+The 70K-90K band delivers the highest quality rate of any segment. Over 100K
+is the only debt band below target with material volume.
+
+**The action:**
+
+1. Adjust keyword bidding to increase bids on search terms associated with
+   $50,000 to $90,000 debt queries
+2. Lower bids on keywords associated with debt over $100,000
+3. Update ad copy to speak directly to mid-to-high debt consumers in the
+   $50,000 to $90,000 range
+
+**Estimated impact:** 10 to 15 additional Good leads per 6-month period
+through debt band mix rebalancing.
+
+**Timeline:** Week 1 to 4. Phased keyword updates. No development required.
+
+---
+
+```{r}
+tbl <- read.csv(
+  "C:/Users/sgpat/Documents/LeadQuality_CaseStudy/output/tables/table_callcenter_quality.csv"
+)
+knitr::kable(tbl, caption = "Quality Rate: Call Center vs Online")
+```
+
+
+Call Center outperforms Online by 5.1 percentage points. The source of
+this advantage is pre-screening. Call center agents verbally qualify
+consumers before entering their details, filtering out low-intent
+individuals before they become paid leads. Online forms currently apply
+no equivalent filter.
+
+When comparing only leads that were actually contacted (excluding No
+Outcome), Call Center and Online convert at near-identical rates (47.1%
+vs 45.5%). This confirms that pre-screening, not the call channel itself,
+drives the quality gap.
+
+**The action:**
+
+1. Add a pre-qualification question to the online lead form: "Approximately
+   how much unsecured debt do you currently carry?" with a slider or
+   dropdown from Under $5,000 to Over $150,000
+2. Soft-gate or reject submissions below $15,000 or above $150,000, matching
+   the debt profile of high-quality leads
+
+**Estimated impact:** 6 to 10 additional Good leads per 6-month period by
+filtering low-intent online submissions before billing.
+
+**Timeline:** Week 3 to 4. Requires a UX and product change to the online
+form. No back-end system integration needed.
+
+---
+
+------------------------------------------------------------------------
+
+# 6. Implementation Roadmap
+
+Five recommendations, eight weeks, zero additional traffic spend. The table below shows the sequencing and expected lead gain at each phase.
+
+## Phased Plan
+
+| Phase | Weeks | Recommendations | Actions | Est. Lead Gain |
+|---|---|---|---|---|
+| Immediate | 1 to 2 | R1, R2 | Google/AdKnowledge rebalance; Head3 removal | +20 to 25 |
+| Short-term | 3 to 4 | R4, R5 | Debt band bid adjustments; Online form pre-screening | +16 to 25 |
+| Medium-term | 5 to 8 | R3 | Verify score API integration | +8 to 12 |
+| **Total** | **8 weeks** | **All five active** | | **+44 to 62** |
+
+The minimum estimate of 44 additional Good leads is exactly the number required to move from the current 8.09% closed rate to the 9.6% target on the same lead volume of 2,857.
+
+## Dependencies and Sequencing
+
+R1 and R2 have no dependencies. Both are configuration and creative changes that can be actioned in parallel from day one. R4 and R5 also require no system work. R4 is a keyword bid update; R5 is a UX form change. Both can be completed by end of week 4 without engineering resource.
+
+R3 is the only recommendation with a hard dependency. It requires confirmation that AddressScore and PhoneScore are available as real-time API calls at lead submission. This must be scoped with the data engineering team before week 5 begins. If the API is not available in real time, the fallback is a post-submission batch scoring run within 24 hours, which still filters low-quality leads before the advertiser billing cycle closes.
+
+## Success Gate
+
+Track these five numbers weekly from week 1 onward:
+
+1. **Overall closed rate:** Target trend from 8.09% toward 9.6%
+2. **AdKnowledge quality rate:** Hold at or above 18.7%
+3. **Google quality rate:** Trend upward from 11.2% as Over 100K volume reduces
+4. **Head3 impression share:** Reach 0% by end of week 2
+5. **Verify score coverage:** Trend toward 100% once R3 is deployed
+
+When the overall closed rate holds at or above 9.6% for two consecutive 30-day periods, the CPL renegotiation from \$30 to \$33 is justified. That triggers \$17,142 in annualised incremental revenue from the same lead volume with no additional traffic spend.
+
+
+------------------------------------------------------------------------
+
+# 7. Appendix
+
+## A. Dataset Summary
+
+| Item | Value |
+|---|---|
+| Raw leads | 3,021 |
+| Duplicate emails removed from quality calculations | 164 |
+| Clean analysis base | 2,857 |
+| Date range | April 2 to September 30, 2009 |
+| Variables in raw dataset | 24 |
+| New features engineered | 11 |
+| Verify score coverage | 46% (1,315 leads) |
+
+## B. Statistical Tests Used
+
+| Variable | Test | Reason |
+|---|---|---|
+| Partner, Debt Band, Widget Design, Ad Type, Lead Source, Day of Week | Chi-Square (with Monte Carlo simulation where cell counts were low) | Categorical variable vs categorical outcome |
+| Verify Score | Mann-Whitney U | Continuous variable, non-normal distribution |
+
+Significance threshold: p \< 0.05. All tests run on the 2,857 unique lead base.
+
+## C. Tools
+
+Analysis conducted in R. Key packages: `dplyr`, `ggplot2`, `knitr`, `kableExtra`. Report compiled in R Markdown and exported to Word via Pandoc.
