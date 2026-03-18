@@ -352,23 +352,22 @@ required to move from 8.09% to 9.6% on the same 2,857-lead base.
 ## Repository Structure
 
 ```
-LeadQuality_CaseStudy/
-├── data/
-│   ├── Analyst_case_study_dataset_1.xlsx
-│   └── clean_data_final.xlsx
-├── report/
-│   ├── lead_quality_analysis.Rmd
-│   ├── lead_quality_analysis.pdf
-│   ├── Final_Report.Rmd
-│   └── Final_Report.docx
-├── charts/
-└── tables/
+Lead-Quality-Analysis-Debt-Reduction/
+├── Analyst_case_study_dataset_1.xlsx
+├── clean_data_final.xlsx
+├── Final_Report.Rmd
+├── Final_Report.docx
+├── lead_quality_analysis.Rmd
+├── lead_quality_analysis.pdf
+└── README.md
 ```
 
-- **data/** — Raw dataset (3,021 leads, 24 columns) and the cleaned, feature-engineered version used for all analysis
-- **report/** — R Markdown source files for both reports, plus the rendered PDF and Word outputs
-- **charts/** — Selected chart PNGs used by the Final Report (subset only; full set regenerates on knit)
-- **tables/** — Selected CSV tables used by the Final Report (subset only; full set regenerates on knit)
+- **Analyst_case_study_dataset_1.xlsx** — Raw dataset as received (3,021 leads, 24 columns)
+- **clean_data_final.xlsx** — Cleaned and feature-engineered dataset used as the base for all analysis
+- **lead_quality_analysis.Rmd** — Full 9-phase technical analysis with all R code, charts, and tables
+- **lead_quality_analysis.pdf** — Rendered PDF output of the technical analysis
+- **Final_Report.Rmd** — Business-facing report in R Markdown
+- **Final_Report.docx** — Rendered Word document of the business report
 
 
 ---
