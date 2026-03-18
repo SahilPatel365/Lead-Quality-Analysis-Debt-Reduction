@@ -351,3 +351,59 @@ required to move from 8.09% to 9.6% on the same 2,857-lead base.
 
 ## Repository Structure
 
+LeadQuality_CaseStudy/
+│
+├── data/
+│ ├── Analyst_case_study_dataset_1.xlsx # Raw dataset (3,021 leads, 24 columns)
+│ └── clean_data_final.xlsx # Cleaned and feature-engineered dataset
+│
+├── report/
+│ ├── lead_quality_analysis.Rmd # Full technical analysis (9 phases, all R code)
+│ ├── lead_quality_analysis.pdf # Rendered PDF of technical analysis
+│ ├── Final_Report.Rmd # Business-facing report (R Markdown)
+│ └── Final_Report.docx # Rendered Word document
+│
+├── charts/ # Selected chart PNGs (subset, full set generated on knit)
+└── tables/ # Selected CSV tables (subset, full set generated on knit)
+
+
+---
+
+## How to Reproduce This Analysis
+
+**Requirements:**
+- R version 4.0 or above
+- RStudio
+- Packages: tidyverse, readxl, knitr, kableExtra, scales
+
+**Steps:**
+
+1. Clone or download this repository
+2. Open `lead_quality_analysis.Rmd` in RStudio
+3. Update the file paths at the top of the setup chunk to match your local directory
+4. Click **Knit** to regenerate the full PDF
+5. To reproduce the business report, open `Final_Report.Rmd` and knit to Word
+
+All charts and tables are generated dynamically when the files are knitted.
+The clean dataset (`clean_data_final.xlsx`) is required for both reports.
+
+---
+
+## Key Technical Skills Demonstrated
+
+- Data profiling and systematic quality auditing across 8 issue categories
+- Data cleaning in R using dplyr (case_when, na_if, factor ordering, duplicate flagging)
+- Feature engineering: 11 new variables from raw columns including composite scoring
+- Exploratory analysis across 7 dimensions with ggplot2 visualisations
+- Multi-variable cross-tabulation analysis (Partner x Debt Band, Debt Band x Widget)
+- Statistical hypothesis testing: Chi-Square (with Monte Carlo), Mann-Whitney U, Spearman Correlation
+- Business impact modelling: revenue gap analysis, scenario testing, CPL uplift calculation
+- Reproducible reporting in R Markdown exported to Word and PDF via Pandoc
+
+---
+
+## Contact
+
+Sahil Patel
+sahilgp365@gmail.com
+github.com/SahilPatel365
